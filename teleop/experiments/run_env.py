@@ -122,7 +122,10 @@ def main(args):
             else:
                 reset_joints = args.start_joints
                 reset_joints = np.array(reset_joints)
-            agent = TeleopAgent(port=teleop_port, start_joints=args.start_joints)
+            agent_start_joints = (
+                np.array(args.start_joints) if args.start_joints is not None else None
+            )
+            agent = TeleopAgent(port=teleop_port, start_joints=agent_start_joints)
             curr_joints = env.get_obs()["joint_positions"]
             curr_joints = np.array(curr_joints)
             if reset_joints.shape == curr_joints.shape:
@@ -132,6 +135,11 @@ def main(args):
                 for jnt in np.linspace(curr_joints, reset_joints, steps):
                     env.step(jnt)
                     time.sleep(0.001)
+            else:
+                print(
+                    "Skipping reset_joints because shape does not match robot state: "
+                    f"reset_joints={reset_joints.shape}, robot_joints={curr_joints.shape}"
+                )
         elif args.agent == "quest":
             from teleop.agents.quest_agent import SingleArmQuestAgent
 

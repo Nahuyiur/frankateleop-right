@@ -20,5 +20,5 @@ if [[ ! -f "$SCRIPT_PATH" ]]; then
 fi
 
 echo ">>> 启动Robot Node ..."
-python3 "$SCRIPT_PATH" --robot=fr3_right --tele_port=6001 --robot_port=50051 --gripper_port=50053 --robot_ip=127.0.0.1
+python3 "$SCRIPT_PATH" --robot=fr3 --tele_port=6001 --robot_port=50051 --gripper_port=50053 --robot_ip=127.0.0.1 --no-home-on-init "$@"
 #robot_ip是直接连接机器人的主机的IP，如果是本机直连机器人，可以用127.0.0.1代替

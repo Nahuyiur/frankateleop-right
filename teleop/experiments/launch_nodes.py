@@ -16,6 +16,9 @@ class Args:
     robot_ip: str = "192.168.1.10"
     robot_port: int = 50051
     gripper_port: int = 50052
+    control_mode: str = "joint"
+    home_on_init: bool = True
+    open_gripper_on_init: bool = True
 
 
 def launch_robot_server(args: Args):
@@ -76,7 +79,10 @@ def launch_robot_server(args: Args):
                 robot_ip=args.robot_ip, 
                 franka_port=args.robot_port, 
                 frankahand_port=args.gripper_port, 
-                joint_positions_desired=fr3_joint_configs["fr3_left"]
+                joint_positions_desired=fr3_joint_configs["fr3_left"],
+                control_mode=args.control_mode,
+                home_on_init=args.home_on_init,
+                open_gripper_on_init=args.open_gripper_on_init,
                 )
         
         elif args.robot == "fr3_right":
@@ -86,7 +92,10 @@ def launch_robot_server(args: Args):
                 robot_ip=args.robot_ip, 
                 franka_port=args.robot_port, 
                 frankahand_port=args.gripper_port, 
-                joint_positions_desired=fr3_joint_configs["fr3_right"]
+                joint_positions_desired=fr3_joint_configs["fr3_right"],
+                control_mode=args.control_mode,
+                home_on_init=args.home_on_init,
+                open_gripper_on_init=args.open_gripper_on_init,
                 )
        
         elif args.robot == "fr3":
@@ -95,7 +104,10 @@ def launch_robot_server(args: Args):
             robot = fr3Robot(
                 robot_ip=args.robot_ip, 
                 franka_port=args.robot_port, 
-                frankahand_port=args.gripper_port
+                frankahand_port=args.gripper_port,
+                control_mode=args.control_mode,
+                home_on_init=args.home_on_init,
+                open_gripper_on_init=args.open_gripper_on_init,
                 )
         elif args.robot == "bimanual_ur":
             from teleop.robots.ur import URRobot
@@ -112,7 +124,11 @@ def launch_robot_server(args: Args):
                 f"Robot {args.robot} not implemented, choose one of: sim_ur, xarm, ur, bimanual_ur, none"
             )
         server = ZMQServerRobot(robot, port=port, host=args.hostname)
-        print(f"Starting robot server on port {port}")
+        print(
+            f"Starting robot server on port {port}, control_mode={args.control_mode}, "
+            f"home_on_init={args.home_on_init}, "
+            f"open_gripper_on_init={args.open_gripper_on_init}"
+        )
         server.serve()
 
 
@@ -122,4 +138,3 @@ def main(args):
 
 if __name__ == "__main__":
     main(tyro.cli(Args))
-
