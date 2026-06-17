@@ -18,4 +18,4 @@ sudo pkill -9 franka_hand_client || echo "未发现 franka_hand_client 进程或
 
 echo ">>> 启动右臂 Franka Hand 客户端 ..."
 cd "$WORK_DIR"
-python ../scripts/launch_gripper.py --config-name=launch_right_gripper
+python ../scripts/launch_gripper.py gripper=robotiq_2f gripper.comport=/dev/serial/by-id/usb-FTDI_USB_TO_RS-485_DAAQM7QD-if00-port0

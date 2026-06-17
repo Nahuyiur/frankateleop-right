@@ -39,22 +39,12 @@ class RobotiqGripperClient:
             raise Exception(f"Failed to contact gripper on port {comport}... ABORTING")
 
         print("Activating gripper...")
-        self.gripper.activate_emergency_release()
-        self.gripper.sendCommand()
-        time.sleep(1)
-        self.gripper.deactivate_emergency_release()
-        self.gripper.sendCommand()
-        time.sleep(1)
-        self.gripper.activate_gripper()
-        self.gripper.sendCommand()
-        if (
-            self.gripper.is_ready()
-            and self.gripper.sendCommand()
-            and self.gripper.getStatus()
-        ):
+        if self.gripper.is_ready():
+            print("Already activated.")
+        elif self._activate_gripper():
             print("Activated.")
         else:
-            raise Exception(f"Unable to activate!")
+            raise Exception(f"Unable to activate! Last status: {self._status_summary()}")
 
         # Connect to server
         self.channel = grpc.insecure_channel(f"{server_ip}:{server_port}")
@@ -67,6 +57,25 @@ class RobotiqGripperClient:
         metadata.max_width = self.gripper.stroke
 
         self.connection.InitRobotClient(metadata)
+
+    def _activate_gripper(self, timeout_sec: float = 15.0) -> bool:
+        self.gripper.deactivate_gripper()
+        self.gripper.sendCommand()
+        time.sleep(0.5)
+
+        self.gripper.activate_gripper()
+        self.gripper.sendCommand()
+
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            time.sleep(0.2)
+            if self.gripper.getStatus() and self.gripper.is_ready():
+                return True
+        return self.gripper.getStatus() and self.gripper.is_ready()
+
+    def _status_summary(self) -> str:
+        fields = ("gACT", "gGTO", "gSTA", "gOBJ", "gFLT", "gPR", "gPO", "gCU")
+        return ", ".join(f"{field}={getattr(self.gripper, field, None)}" for field in fields)
 
     def get_gripper_state(self):
         state = polymetis_pb2.GripperState()
@@ -86,8 +95,8 @@ class RobotiqGripperClient:
         return state
 
     def apply_gripper_command(self, cmd):
-        if cmd.grasp:
-            cmd.width = 0.0
+        # if cmd.grasp:
+        #    cmd.width = 0.0
 
         self.gripper.goto(pos=cmd.width, vel=cmd.speed, force=cmd.force)
         self.gripper.sendCommand()

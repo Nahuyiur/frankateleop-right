@@ -1,11 +1,18 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import tyro
-import torch
 
 from teleop.robots.robot import BimanualRobot, PrintRobot
 from teleop.zmq_core.robot_node import ZMQServerRobot
+
+
+def env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
 
 
 @dataclass
@@ -19,6 +26,7 @@ class Args:
     control_mode: str = "joint"
     home_on_init: bool = True
     open_gripper_on_init: bool = True
+    move_to_initial_pose: bool = env_bool("FRANKA_MOVE_TO_INITIAL_POSE", True)
 
 
 def launch_robot_server(args: Args):
@@ -61,10 +69,7 @@ def launch_robot_server(args: Args):
         server.serve()
 
     else:
-        fr3_joint_configs = {
-            "fr3_left": torch.Tensor([0.580828,0.00354707,0.121271,-1.59745,-1.53366,1.61208,-0.865943]), 
-            "fr3_right": torch.Tensor([-0.506681,0.116912,-0.303241,-1.56214,1.69048,1.57112,-0.804331])  
-        }
+        effective_home_on_init = args.home_on_init and args.move_to_initial_pose
         if args.robot == "xarm":
             from teleop.robots.xarm_robot import XArmRobot
 
@@ -79,9 +84,8 @@ def launch_robot_server(args: Args):
                 robot_ip=args.robot_ip, 
                 franka_port=args.robot_port, 
                 frankahand_port=args.gripper_port, 
-                joint_positions_desired=fr3_joint_configs["fr3_left"],
                 control_mode=args.control_mode,
-                home_on_init=args.home_on_init,
+                home_on_init=effective_home_on_init,
                 open_gripper_on_init=args.open_gripper_on_init,
                 )
         
@@ -92,9 +96,8 @@ def launch_robot_server(args: Args):
                 robot_ip=args.robot_ip, 
                 franka_port=args.robot_port, 
                 frankahand_port=args.gripper_port, 
-                joint_positions_desired=fr3_joint_configs["fr3_right"],
                 control_mode=args.control_mode,
-                home_on_init=args.home_on_init,
+                home_on_init=effective_home_on_init,
                 open_gripper_on_init=args.open_gripper_on_init,
                 )
        
@@ -106,7 +109,7 @@ def launch_robot_server(args: Args):
                 franka_port=args.robot_port, 
                 frankahand_port=args.gripper_port,
                 control_mode=args.control_mode,
-                home_on_init=args.home_on_init,
+                home_on_init=effective_home_on_init,
                 open_gripper_on_init=args.open_gripper_on_init,
                 )
         elif args.robot == "bimanual_ur":
@@ -127,7 +130,8 @@ def launch_robot_server(args: Args):
         print(
             f"Starting robot server on port {port}, control_mode={args.control_mode}, "
             f"home_on_init={args.home_on_init}, "
-            f"open_gripper_on_init={args.open_gripper_on_init}"
+            f"open_gripper_on_init={args.open_gripper_on_init}, "
+            f"move_to_initial_pose={args.move_to_initial_pose}"
         )
         server.serve()
 
