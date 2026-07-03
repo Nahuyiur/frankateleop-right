@@ -38,7 +38,14 @@ if [[ ! -f "$SCRIPT_PATH" ]]; then
     exit 1
 fi
 
+RIGHT_ZMQ_HOSTNAME="${RIGHT_ZMQ_HOSTNAME:-${FRANKA_ZMQ_HOSTNAME:-0.0.0.0}}"
+
 echo ">>> 启动Robot Node ..."
+export FRANKA_ROBOT_NAME="right"
+echo ">>> robot side=$FRANKA_ROBOT_NAME"
 echo ">>> move_to_initial_pose=${FRANKA_MOVE_TO_INITIAL_POSE:-1}"
-python3 "$SCRIPT_PATH" --robot=fr3 --tele_port=6001 --robot_port=50051 --gripper_port=50053 --robot_ip=127.0.0.1 "$@"
+echo ">>> initial_pose_source=${FRANKA_INITIAL_POSE_SOURCE:-auto}"
+echo ">>> initial_joints_file=${FRANKA_INITIAL_JOINTS_FILE:-$REPO_ROOT/config/initial_joints.json}"
+echo ">>> ZMQ bind hostname=$RIGHT_ZMQ_HOSTNAME"
+python3 "$SCRIPT_PATH" --robot=fr3 --tele_port=6001 --hostname="$RIGHT_ZMQ_HOSTNAME" --robot_port=50051 --gripper_port=50053 --robot_ip=127.0.0.1 "$@"
 #robot_ip是直接连接机器人的主机的IP，如果是本机直连机器人，可以用127.0.0.1代替

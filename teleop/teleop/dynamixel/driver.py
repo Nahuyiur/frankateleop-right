@@ -1,3 +1,4 @@
+import os
 import time
 from threading import Event, Lock, Thread
 from typing import Protocol, Sequence
@@ -103,6 +104,7 @@ class DynamixelDriver(DynamixelDriverProtocol):
         """
         self._ids = ids
         self._joint_angles = None
+        self._read_error = None
         self._lock = Lock()
 
         # Initialize the port handler, packet handler, and group sync read/write
@@ -127,6 +129,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
 
         if not self._portHandler.setBaudRate(baudrate):
             raise RuntimeError(f"Failed to change the baudrate, {baudrate}")
+        packet_timeout_ms = int(os.environ.get("DYNAMIXEL_PACKET_TIMEOUT_MS", "500"))
+        self._portHandler.setPacketTimeoutMillis(packet_timeout_ms)
 
         # Add parameters for each Dynamixel servo to the group sync read
         for dxl_id in self._ids:
@@ -140,7 +144,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
         try:
             self.set_torque_mode(self._torque_enabled)
         except Exception as e:
-            print(f"port: {port}, {e}")
+            self._portHandler.closePort()
+            raise RuntimeError(f"Failed to initialize Dynamixel bus on {port}: {e}") from e
 
         self._stop_thread = Event()
         self._start_reading_thread()
@@ -210,39 +215,53 @@ class DynamixelDriver(DynamixelDriverProtocol):
         # Continuously read joint angles and update the joint_angles array
         while not self._stop_thread.is_set():
             time.sleep(0.001)
-            with self._lock:
-                _joint_angles = np.zeros(len(self._ids), dtype=int)
-                dxl_comm_result = self._groupSyncRead.txRxPacket()
-                if dxl_comm_result != COMM_SUCCESS:
-                    print(f"warning, comm failed: {dxl_comm_result}")
-                    continue
-                for i, dxl_id in enumerate(self._ids):
-                    if self._groupSyncRead.isAvailable(
-                        dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION
-                    ):
-                        angle = self._groupSyncRead.getData(
+            try:
+                with self._lock:
+                    _joint_angles = np.zeros(len(self._ids), dtype=int)
+                    dxl_comm_result = self._groupSyncRead.txRxPacket()
+                    if dxl_comm_result != COMM_SUCCESS:
+                        print(f"warning, comm failed: {dxl_comm_result}", flush=True)
+                        continue
+                    for i, dxl_id in enumerate(self._ids):
+                        if self._groupSyncRead.isAvailable(
                             dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION
-                        )
-                        angle = np.int32(np.uint32(angle))
-                        _joint_angles[i] = angle
-                    else:
-                        raise RuntimeError(
-                            f"Failed to get joint angles for Dynamixel with ID {dxl_id}"
-                        )
-                self._joint_angles = _joint_angles
+                        ):
+                            angle = self._groupSyncRead.getData(
+                                dxl_id, ADDR_PRESENT_POSITION, LEN_PRESENT_POSITION
+                            )
+                            angle = np.int32(np.uint32(angle))
+                            _joint_angles[i] = angle
+                        else:
+                            raise RuntimeError(
+                                f"Failed to get joint angles for Dynamixel with ID {dxl_id}"
+                            )
+                    self._joint_angles = _joint_angles
+            except Exception as exc:
+                self._read_error = exc
+                print(f"error, Dynamixel read thread stopped: {exc}", flush=True)
+                self._stop_thread.set()
+                return
             # self._groupSyncRead.clearParam() # TODO what does this do? should i add it
 
     def get_joints(self) -> np.ndarray:
         # Return a copy of the joint_angles array to avoid race conditions
+        timeout_sec = float(os.environ.get("DYNAMIXEL_READ_TIMEOUT_SEC", "5"))
+        started = time.time()
         while self._joint_angles is None:
-            time.sleep(0.1)
+            if self._read_error is not None:
+                raise RuntimeError(f"Dynamixel read failed: {self._read_error}") from self._read_error
+            if time.time() - started >= timeout_sec:
+                raise RuntimeError(
+                    f"Timed out waiting for first Dynamixel joint read after {timeout_sec:.1f}s"
+                )
+            time.sleep(0.05)
         # with self._lock:
         _j = self._joint_angles.copy()
         return _j / 2048.0 * np.pi
 
     def close(self):
         self._stop_thread.set()
-        self._reading_thread.join()
+        self._reading_thread.join(timeout=1.0)
         self._portHandler.closePort()
 
 

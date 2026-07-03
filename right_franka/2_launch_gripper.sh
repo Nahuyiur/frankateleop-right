@@ -121,7 +121,7 @@ fi
 
 resolve_robotiq_comport() {
     local explicit="${RIGHT_ROBOTIQ_COMPORT:-${RIGHT_ROBOTIQ_PORT:-${FRANKA_ROBOTIQ_COMPORT:-${FRANKA_ROBOTIQ_PORT:-${ROBOTIQ_COMPORT:-${ROBOTIQ_PORT:-}}}}}}"
-    local default_comport="${RIGHT_ROBOTIQ_DEFAULT_COMPORT:-}"
+    local default_comport="${RIGHT_ROBOTIQ_DEFAULT_COMPORT:-/dev/serial/by-id/usb-FTDI_USB_TO_RS-485_DAAQM7QD-if00-port0}"
 
     if [[ -n "$explicit" ]]; then
         if [[ ! -e "$explicit" ]]; then

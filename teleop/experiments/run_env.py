@@ -1,5 +1,6 @@
 import datetime
 import glob
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,24 @@ def print_color(*args, color=None, attrs=(), **kwargs):
     if len(args) > 0:
         args = tuple(termcolor.colored(arg, color=color, attrs=attrs) for arg in args)
     print(*args, **kwargs)
+
+
+def wrap_arm_action_to_nearest(action, reference):
+    action = np.asarray(action, dtype=float).copy()
+    reference = np.asarray(reference, dtype=float)
+    count = min(7, action.shape[0], reference.shape[0])
+    if count > 0:
+        action[:count] = reference[:count] + (
+            (action[:count] - reference[:count] + np.pi) % (2 * np.pi) - np.pi
+        )
+    return action
+
+
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in ("1", "true", "yes", "on")
 
 
 @dataclass
@@ -157,10 +176,10 @@ def main(args):
 
     # going to start position
     print("Going to start position")
-    start_pos = agent.act(env.get_obs())
     obs = env.get_obs()
     joints = obs["joint_positions"]
     joints = np.array(joints)
+    start_pos = wrap_arm_action_to_nearest(agent.act(obs), joints)
 
     abs_deltas = np.abs(start_pos - joints)
     id_max_joint_delta = np.argmax(abs_deltas)
@@ -194,8 +213,8 @@ def main(args):
     max_delta = 0.05
     for _ in range(25):
         obs = env.get_obs()
-        command_joints = agent.act(obs)
         current_joints = obs["joint_positions"]
+        command_joints = wrap_arm_action_to_nearest(agent.act(obs), current_joints)
         delta = command_joints - current_joints
         max_joint_delta = np.abs(delta).max()
         if max_joint_delta > max_delta:
@@ -204,7 +223,7 @@ def main(args):
 
     obs = env.get_obs()
     joints = obs["joint_positions"]
-    action = agent.act(obs)
+    action = wrap_arm_action_to_nearest(agent.act(obs), joints)
     if (action - joints > 0.5).any():
         print("Action is too big")
 
@@ -225,6 +244,15 @@ def main(args):
 
     save_path = None
     start_time = time.time()
+    debug_action = env_flag("TELEOP_DEBUG_ACTION")
+    debug_interval = float(os.environ.get("TELEOP_DEBUG_INTERVAL_SEC", "1.0"))
+    debug_next_time = 0.0
+    debug_prev_action = None
+    if debug_action:
+        print(
+            "TELEOP_DEBUG_ACTION enabled "
+            f"(interval={debug_interval:.2f}s)"
+        )
     while True:
         num = time.time() - start_time
         message = f"\rTime passed: {round(num, 2)}          "
@@ -235,7 +263,29 @@ def main(args):
             end="",
             flush=True,
         )
-        action = agent.act(obs)
+        action = wrap_arm_action_to_nearest(agent.act(obs), obs["joint_positions"])
+        now = time.time()
+        if debug_action and now >= debug_next_time:
+            current = np.asarray(obs["joint_positions"], dtype=float)
+            action_array = np.asarray(action, dtype=float)
+            delta = action_array - current
+            if debug_prev_action is None:
+                leader_step = 0.0
+            else:
+                leader_step = float(np.max(np.abs(action_array - debug_prev_action)))
+            debug_prev_action = action_array.copy()
+            print()
+            print(
+                "TELEOP_DEBUG_ACTION "
+                f"max_cmd_delta={np.max(np.abs(delta)):.4f} "
+                f"max_leader_step={leader_step:.4f} "
+                "current[:7]="
+                f"{np.array2string(current[:7], precision=3, suppress_small=True)} "
+                "action[:7]="
+                f"{np.array2string(action_array[:7], precision=3, suppress_small=True)}",
+                flush=True,
+            )
+            debug_next_time = now + debug_interval
         dt = datetime.datetime.now()
         if args.use_save_interface:
             state = kb_interface.update()
