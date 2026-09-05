@@ -14,7 +14,8 @@ robot_client:
     hz: ${hz}
     robot_model_cfg: ${robot_model}
   executable_cfg:
-    robot_ip: "172.16.0.2"
+    # FR3 B / right Desk on the fixed switch topology.
+    robot_ip: ${env:FRANKA_RIGHT_ROBOT_IP,172.16.0.4}
     control_ip: ${ip}
     control_port: ${port}
     readonly: false
@@ -31,13 +32,13 @@ robot_client:
     limits: 
       # bounding box of the workspace
       cartesian_pos_upper:
-        - 0.85
-        - 0.85
-        - 0.85
+        - 1.85
+        - 1.85
+        - 1.85
       cartesian_pos_lower:
-        - -0.85
-        - -0.85
-        - -0.05
+        - -1.85
+        - -1.85
+        - -1.85
 
       # the remaining limits are set to the original franka limits minus a margin
       joint_pos_upper: #margin: 0.1 rad

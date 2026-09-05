@@ -1,5 +1,7 @@
 import pickle
+import logging
 import threading
+import time
 from typing import Any, Dict
 
 import numpy as np
@@ -8,6 +10,7 @@ import zmq
 from teleop.robots.robot import Robot
 
 DEFAULT_ROBOT_PORT = 6000
+LOGGER = logging.getLogger("franka_zmq_node")
 
 
 class ZMQServerRobot:
@@ -20,10 +23,14 @@ class ZMQServerRobot:
         self._robot = robot
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.REP)
+        self._socket.setsockopt(zmq.LINGER, 0)
+        if hasattr(zmq, "TCP_NODELAY"):
+            self._socket.setsockopt(zmq.TCP_NODELAY, 1)
         addr = f"tcp://{host}:{port}"
         debug_message = f"Robot Sever Binding to {addr}, Robot: {robot}"
         print(debug_message)
         self._timout_message = f"Timeout in Robot Server, Robot: {robot}"
+        self._last_idle_log = 0.0
         self._socket.bind(addr)
         self._stop_event = threading.Event()
 
@@ -54,34 +61,38 @@ class ZMQServerRobot:
                         result = self._robot.command_joint_state(**args)
                     elif method == "command_ee_pose":
                         if not hasattr(self._robot, "command_ee_pose"):
-                            result = {
-                                "error": f"Robot {self._robot} does not support command_ee_pose"
-                            }
+                            result = {"error": f"Robot {self._robot} does not support command_ee_pose"}
                         else:
                             result = self._robot.command_ee_pose(**args)
                     elif method == "move_to_joint_positions":
                         if not hasattr(self._robot, "move_to_joint_positions"):
-                            result = {
-                                "error": (
-                                    f"Robot {self._robot} does not support "
-                                    "move_to_joint_positions"
-                                )
-                            }
+                            result = {"error": f"Robot {self._robot} does not support move_to_joint_positions"}
                         else:
                             result = self._robot.move_to_joint_positions(**args)
                     elif method == "get_observations":
-                        result = self._robot.get_observations()
+                        try:
+                            result = self._robot.get_observations(**args)
+                        except TypeError as exc:
+                            # Older GELLO/robot adapters do not yet accept the
+                            # fast observation flag; fall back to their full
+                            # observation contract without dropping the ZMQ
+                            # request.
+                            if "fast" not in str(exc) or not args.get("fast"):
+                                raise
+                            result = self._robot.get_observations()
                     else:
                         result = {"error": f"Invalid method: {method}"}
-                        print(result)
+                        LOGGER.error("invalid request result=%s", result)
                 except Exception as exc:
                     result = {"error": f"{type(exc).__name__}: {exc}"}
-                    print(result)
+                    LOGGER.warning("robot request failed method=%s error=%s", method, exc)
 
                 self._socket.send(pickle.dumps(result))
             except zmq.Again:
-                print(self._timout_message)
-                # Timeout occurred, check if the stop event is set
+                now = time.monotonic()
+                if now - self._last_idle_log >= 5.0:
+                    LOGGER.debug("%s (idle; no client request)", self._timout_message)
+                    self._last_idle_log = now
 
     def stop(self) -> None:
         """Signal the server to stop serving."""
@@ -96,12 +107,6 @@ class ZMQClientRobot(Robot):
         self._socket = self._context.socket(zmq.REQ)
         self._socket.connect(f"tcp://{host}:{port}")
 
-    def _recv_result(self) -> Any:
-        result = pickle.loads(self._socket.recv())
-        if isinstance(result, dict) and "error" in result:
-            raise RuntimeError(result["error"])
-        return result
-
     def num_dofs(self) -> int:
         """Get the number of joints in the robot.
 
@@ -111,7 +116,14 @@ class ZMQClientRobot(Robot):
         request = {"method": "num_dofs"}
         send_message = pickle.dumps(request)
         self._socket.send(send_message)
-        result = self._recv_result()
+        result = pickle.loads(self._socket.recv())
+        return result
+
+    def get_control_mode(self) -> str:
+        request = {"method": "get_control_mode"}
+        send_message = pickle.dumps(request)
+        self._socket.send(send_message)
+        result = pickle.loads(self._socket.recv())
         return result
 
     def get_joint_state(self) -> np.ndarray:
@@ -123,14 +135,7 @@ class ZMQClientRobot(Robot):
         request = {"method": "get_joint_state"}
         send_message = pickle.dumps(request)
         self._socket.send(send_message)
-        result = self._recv_result()
-        return result
-
-    def get_control_mode(self) -> str:
-        request = {"method": "get_control_mode"}
-        send_message = pickle.dumps(request)
-        self._socket.send(send_message)
-        result = self._recv_result()
+        result = pickle.loads(self._socket.recv())
         return result
 
     def command_joint_state(self, joint_state: np.ndarray) -> None:
@@ -145,7 +150,7 @@ class ZMQClientRobot(Robot):
         }
         send_message = pickle.dumps(request)
         self._socket.send(send_message)
-        result = self._recv_result()
+        result = pickle.loads(self._socket.recv())
         return result
 
     def command_ee_pose(
@@ -169,7 +174,7 @@ class ZMQClientRobot(Robot):
         }
         send_message = pickle.dumps(request)
         self._socket.send(send_message)
-        result = self._recv_result()
+        result = pickle.loads(self._socket.recv())
         return result
 
     def get_observations(self) -> Dict[str, np.ndarray]:
@@ -181,5 +186,5 @@ class ZMQClientRobot(Robot):
         request = {"method": "get_observations"}
         send_message = pickle.dumps(request)
         self._socket.send(send_message)
-        result = self._recv_result()
+        result = pickle.loads(self._socket.recv())
         return result

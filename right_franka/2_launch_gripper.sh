@@ -22,14 +22,35 @@ source_conda() {
 
 sudo_run() {
     if command -v sudo >/dev/null 2>&1; then
-        if [[ -n "${FRANKA_SUDO_PASSWORD:-}" ]]; then
-            printf '%s\n' "$FRANKA_SUDO_PASSWORD" | sudo -S -p '' "$@"
+        if sudo -n true >/dev/null 2>&1; then
+            sudo -n "$@"
+            return
+        fi
+        local sudo_password="${FRANKA_SUDO_PASSWORD:-}"
+        if [[ -z "$sudo_password" && -n "${FRANKA_SUDO_PASSWORD_FILE:-}" ]]; then
+            validate_sudo_password_file "$FRANKA_SUDO_PASSWORD_FILE" || return 1
+            IFS= read -r sudo_password < "$FRANKA_SUDO_PASSWORD_FILE" || true
+        fi
+        if [[ -n "$sudo_password" ]]; then
+            printf '%s\n' "$sudo_password" | sudo -S -p '' "$@"
         else
             sudo "$@"
         fi
     else
         "$@"
     fi
+}
+
+validate_sudo_password_file() {
+    local file="$1"
+    local mode owner
+    [[ -f "$file" ]] || { echo "ERROR: sudo credential file not found: $file" >&2; return 1; }
+    mode="$(stat -c '%a' "$file")"
+    owner="$(stat -c '%u' "$file")"
+    [[ "$owner" == "$(id -u)" && ( "$mode" == "600" || "$mode" == "400" ) ]] || {
+        echo "ERROR: sudo credential file must be owned by the current user with mode 600 or 400: $file" >&2
+        return 1
+    }
 }
 
 cleanup_gripper_port() {
@@ -112,11 +133,73 @@ source_conda
 conda activate polymetis || { echo "❌ 激活失败"; exit 1; }
 
 POLY_ROOT="$REPO_ROOT/polymetis"
+GRIPPER_SERVER_PORT="${RIGHT_GRIPPER_SERVER_PORT:-50053}"
 
 WORK_DIR="$POLY_ROOT/polymetis/python/polymetis"
 if [[ ! -d "$WORK_DIR/conf" ]]; then
     echo "❌ 配置目录 $WORK_DIR/conf 不存在"
     exit 1
+fi
+
+resolve_gripper_driver() {
+    local requested="${RIGHT_GRIPPER_DRIVER:-${FRANKA_GRIPPER_DRIVER:-auto}}"
+    local finger_comport="${RIGHT_FINGER_COMPORT:-/dev/ttyFingerRight}"
+
+    case "${requested,,}" in
+        auto)
+            if [[ -e "$finger_comport" ]]; then
+                printf '%s\n' "das_finger"
+            else
+                printf '%s\n' "robotiq"
+            fi
+            ;;
+        das|das_finger|finger)
+            printf '%s\n' "das_finger"
+            ;;
+        robotiq)
+            printf '%s\n' "robotiq"
+            ;;
+        *)
+            echo "❌ 未知 RIGHT_GRIPPER_DRIVER：$requested（可选 auto/das_finger/robotiq）" >&2
+            exit 1
+            ;;
+    esac
+}
+
+GRIPPER_DRIVER_RESOLVED="$(resolve_gripper_driver)"
+cleanup_gripper_port "$GRIPPER_SERVER_PORT"
+
+if [[ "$GRIPPER_DRIVER_RESOLVED" == "das_finger" ]]; then
+    FINGER_COMPORT_RESOLVED="${RIGHT_FINGER_COMPORT:-/dev/ttyFingerRight}"
+    FINGER_BRIDGE="$REPO_ROOT/umi_genrobot/bridge/das_finger_polymetis_server.py"
+    FINGER_SDK_ROOT="${DAS_FINGER_SDK_ROOT:-$REPO_ROOT/umi_genrobot/vendor/gen_finger_con_python_sdk_release}"
+
+    if [[ ! -e "$FINGER_COMPORT_RESOLVED" ]]; then
+        echo "❌ DAS Finger 串口不存在：$FINGER_COMPORT_RESOLVED" >&2
+        echo "   请检查 /dev/ttyFingerRight udev 映射，或设置 RIGHT_FINGER_COMPORT。" >&2
+        exit 1
+    fi
+    if [[ ! -f "$FINGER_BRIDGE" ]]; then
+        echo "❌ DAS Finger Polymetis 适配器不存在：$FINGER_BRIDGE" >&2
+        exit 1
+    fi
+    if [[ ! -d "$FINGER_SDK_ROOT" ]]; then
+        echo "❌ DAS Finger SDK 不存在：$FINGER_SDK_ROOT" >&2
+        exit 1
+    fi
+
+    echo ">>> 启动 DAS Finger Controller RV3 ..."
+    echo ">>> DAS Finger 串口: $FINGER_COMPORT_RESOLVED (921600 baud)"
+    echo ">>> Gripper server port: $GRIPPER_SERVER_PORT"
+    echo ">>> 安全策略: 收到首个明确 Goto 命令前不发送夹爪距离指令"
+    exec python3 "$FINGER_BRIDGE" \
+        --serial-port "$FINGER_COMPORT_RESOLVED" \
+        --sdk-root "$FINGER_SDK_ROOT" \
+        --server-port "$GRIPPER_SERVER_PORT" \
+        --baudrate "${RIGHT_FINGER_BAUDRATE:-921600}" \
+        --hz "${RIGHT_FINGER_COMMAND_HZ:-30}" \
+        --max-width "${RIGHT_FINGER_MAX_WIDTH:-0.2}" \
+        "$@"
 fi
 
 resolve_robotiq_comport() {
@@ -157,8 +240,6 @@ resolve_robotiq_comport() {
 }
 
 ROBOTIQ_COMPORT_RESOLVED="$(resolve_robotiq_comport)"
-GRIPPER_SERVER_PORT="${RIGHT_GRIPPER_SERVER_PORT:-50053}"
-cleanup_gripper_port "$GRIPPER_SERVER_PORT"
 
 echo ">>> 启动 Robotiq Gripper 客户端 ..."
 echo ">>> Robotiq 串口: $ROBOTIQ_COMPORT_RESOLVED"
