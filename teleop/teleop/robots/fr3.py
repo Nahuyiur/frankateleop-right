@@ -439,6 +439,18 @@ class fr3Robot(Robot):
 
         hold_result = self._guard_cartesian_controller(pose)
         if hold_result is not None:
+            # A Cartesian soft-limit HOLD must not suppress an independent
+            # gripper command. The arm can be held while the operator still
+            # opens/closes the fingers.
+            if update_gripper:
+                width = float(np.clip(gripper_width, 0.0, self._max_gripper_width))
+                closedness = 1.0 - width / self._max_gripper_width
+                self._remember_gripper_command(
+                    closedness,
+                    width,
+                    "command_ee_pose_hold",
+                )
+                self._queue_gripper_command(width, gripper_speed, gripper_force)
             return hold_result
 
         from scipy.spatial.transform import Rotation
@@ -453,10 +465,24 @@ class fr3Robot(Robot):
         except Exception as exc:
             if "no controller running" not in str(exc).lower():
                 raise
-            hold_result = self._guard_cartesian_controller(pose)
-            if hold_result is None:
-                raise
-            return hold_result
+            # is_running_policy() can report a stale/optimistic state after
+            # Polymetis has stopped the policy. Force a restart and retry the
+            # exact same target once; the old code restarted/checks but then
+            # re-raised without ever retrying the pose update.
+            self.robot.start_cartesian_impedance()
+            self._cartesian_policy_started = True
+            try:
+                update_idx = self.robot.update_desired_ee_pose(
+                    position=position, orientation=orientation
+                )
+            except Exception as retry_exc:
+                if "no controller running" not in str(retry_exc).lower():
+                    raise
+                return {
+                    "status": "hold",
+                    "reason": "cartesian_controller_restarted",
+                    "detail": str(retry_exc),
+                }
         if update_idx == -1:
             raise RuntimeError(f"Franka IK failed for pose_6d={pose.tolist()}")
 
