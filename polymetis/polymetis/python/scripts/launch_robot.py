@@ -22,6 +22,20 @@ from polymetis.utils.data_dir import BUILD_DIR, which
 log = logging.getLogger(__name__)
 
 
+def _sudo_environment_args():
+    """Pass runtime library paths explicitly after sudo sanitizes the environment."""
+    path = os.pathsep.join(
+        item
+        for item in os.environ.get("PATH", "").split(os.pathsep)
+        if item and not item.startswith("/tmp/franka-sudo-wrapper.")
+    )
+    args = [f"PATH={path}"]
+    library_path = os.environ.get("LD_LIBRARY_PATH")
+    if library_path:
+        args.append(f"LD_LIBRARY_PATH={library_path}")
+    return args
+
+
 @hydra.main(config_name="launch_robot")
 def main(cfg):
     log.info(f"Adding {BUILD_DIR} to $PATH")
@@ -48,7 +62,7 @@ def main(cfg):
         log.info(f"Acquiring sudo...")
         subprocess.run(["sudo", "echo", '"Acquired sudo."'], check=True)
 
-        server_cmd = ["sudo", "-s", "env", '"PATH=$PATH"'] + server_cmd + ["-r"]
+        server_cmd = ["sudo", "env"] + _sudo_environment_args() + server_cmd + ["-r"]
         log.info(f"Server command: {' '.join(server_cmd)}")
     server_output = subprocess.Popen(
         server_cmd, stdout=sys.stdout, stderr=sys.stderr, preexec_fn=os.setpgrp

@@ -1,0 +1,9 @@
+Repository: https://github.com/genrobot-ai/gen_finger_con_python_sdk_release
+Branch: main
+Commit: 295f458d1946cb0c3721cc0db5b6a76d808678ae
+Commit date: 2026-07-11T11:55:05Z
+Archive SHA256: 6a9fd91c02c7731fc7df8e425c494cdd4b5f9b694bcd85b4e87471dbaf5627f1
+
+The archive was downloaded from GitHub's codeload endpoint for main and
+verified before extraction. The vendor repository's start_finger.py is not a
+zero-motion diagnostic: it eventually sets a 0.05 m target.

@@ -1,3 +1,4 @@
+#include "mozi_policy_trace.hpp"
 // Copyright (c) Facebook, Inc. and its affiliates.
 
 // This source code is licensed under the MIT license found in the
@@ -82,6 +83,9 @@ public:
   TODO
   */
   explicit PolymetisControllerServerImpl();
+  std::unique_ptr<mozi::PolicyTrace> mozi_policy_trace_;
+  uint64_t mozi_generation_=0,mozi_revision_=0,mozi_first_revision_=UINT64_MAX;
+
 
   /**
   TODO

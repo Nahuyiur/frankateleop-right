@@ -22,7 +22,7 @@ def repo_root() -> Path:
 
 
 def default_initial_joints_file() -> str:
-    return str(repo_root() / "config" / "initial_joints.json")
+    return str(repo_root() / "config" / "initial_joints_v0.5.json")
 
 
 @dataclass

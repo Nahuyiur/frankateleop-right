@@ -39,23 +39,23 @@ robot_client:
         - -0.85
         - -0.05
 
-      # the remaining limits are set to the original franka limits minus a margin
-      joint_pos_upper: #margin: 0.1 rad
-        - 2.64
-        - 1.68
-        - 2.80
-        - -0.25
-        - 2.70
-        - 4.41
-        - 2.91
-      joint_pos_lower: #margin: 0.1 rad
-        - -2.64
-        - -1.68
-        - -2.80
-        - -2.94
-        - -2.70
-        - 0.64
-        - -2.91
+      # Position bounds follow the installed FR3 Desk URDF. Other limits below retain their existing settings.
+      joint_pos_upper: # FR3 factory position bounds; no extra angular inset
+        - 2.9007400166666666
+        - 1.8360900166666667
+        - 2.9007400166666666
+        - -0.11693708333333333
+        - 2.87630335
+        - 4.62163335
+        - 3.05083335
+      joint_pos_lower: # FR3 factory position bounds; no extra angular inset
+        - -2.9007400166666666
+        - -1.8360900166666667
+        - -2.9007400166666666
+        - -3.077020016666667
+        - -2.87630335
+        - 0.43982265
+        - -3.05083335
       joint_vel: #margin: 0.1 rad/s
         - 2.52
         - 2.52
@@ -76,15 +76,15 @@ robot_client:
 
     collision_behavior:
       lower_torque: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
-      upper_torque: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
+      upper_torque: [55.0, 55.0, 55.0, 55.0, 40.0, 40.0, 40.0] # 2026-10-03: J1-J4 40->55 so 60 N presses do not trip joint reflex
       lower_force: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
-      upper_force: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
+      upper_force: [60.0, 60.0, 60.0, 40.0, 40.0, 40.0] # 2026-10-03: F 40->60 N, motor press needs ~45 N; moments unchanged
 
     safety_controller:
       is_active: true
       margins: # margin from hard safety limits at which safety controllers start to kick in
         cartesian_pos: 0.05
-        joint_pos: 0.2
+        joint_pos: 0.05 # spring starts 0.05 rad inside the factory bound, outside the fr3.py HOLD line (0.10)
         joint_vel: 0.5
       stiffness:
         cartesian_pos: 200.0

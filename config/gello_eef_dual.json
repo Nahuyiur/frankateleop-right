@@ -1,0 +1,21 @@
+{
+  "right_ssh": "pnp@192.168.100.86",
+  "right_repo": "/home/pnp/frankateleop",
+  "ssh_identity": "/home/pnp/.ssh/frankateleop_right_ed25519",
+  "translation_scale": 0.5,
+  "rotation_scale": 0.5,
+  "max_anchor_translation": 0.12,
+  "max_anchor_rotation": 0.6,
+  "left": {
+    "teleop_port": "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTBZIB2R-if00-port0",
+    "leader_to_follower_base_rpy_deg": [0, 0, 0],
+    "calibration_verified": false,
+    "workspace_base_m": null
+  },
+  "right": {
+    "teleop_port": "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTBJTKP2-if00-port0",
+    "leader_to_follower_base_rpy_deg": [0, 0, 0],
+    "calibration_verified": false,
+    "workspace_base_m": null
+  }
+}

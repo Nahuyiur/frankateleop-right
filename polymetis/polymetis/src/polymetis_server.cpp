@@ -9,6 +9,14 @@
 PolymetisControllerServerImpl::PolymetisControllerServerImpl() {
   controller_model_buffer_.reserve(MAX_MODEL_BYTES);
   updates_model_buffer_.reserve(MAX_MODEL_BYTES);
+  const char* enabled=std::getenv("MOZI_NATIVE_FAULT_WINDOW");
+  if(!enabled || std::string(enabled)!="0") {
+    try {
+      const char* directory=std::getenv("MOZI_FAULT_WINDOW_DIR");
+      mozi_policy_trace_=std::make_unique<mozi::PolicyTrace>(
+          std::string(directory?directory:"/home/pnp/frankateleop/logs/fault_windows/policy")+"/"+std::to_string(getpid()));
+    } catch(...) {} // Diagnostics cannot make the control server unavailable.
+  }
 }
 
 Status PolymetisControllerServerImpl::GetRobotState(ServerContext *context,
@@ -181,6 +189,8 @@ PolymetisControllerServerImpl::ControlUpdate(ServerContext *context,
     // Last step of episode: update episode marker & reset default controller
     custom_controller_context_.episode_end = robot_state_buffer_.size() - 1;
     custom_controller_context_.status = TERMINATED;
+    if(mozi_policy_trace_)mozi_policy_trace_->emit(4,mozi_generation_,mozi_revision_,robot_state_buffer_.size(),
+        uint64_t(robot_state->timestamp().seconds())*1000000000ULL+robot_state->timestamp().nanos());
 
     robot_client_context_.default_controller->reset();
 
@@ -198,6 +208,13 @@ PolymetisControllerServerImpl::ControlUpdate(ServerContext *context,
   std::vector<float> desired_torque;
   try {
     desired_torque = controller->forward(*torch_robot_state_);
+    // This is the first successful forward using the parameter revision,
+    // recorded under the SAME pre-existing mutex as parameter updates.
+    if(custom_controller_context_.status==RUNNING && mozi_first_revision_!=mozi_revision_) {
+      if(mozi_policy_trace_)mozi_policy_trace_->emit(3,mozi_generation_,mozi_revision_,robot_state_buffer_.size(),
+          uint64_t(robot_state->timestamp().seconds())*1000000000ULL+robot_state->timestamp().nanos());
+      mozi_first_revision_=mozi_revision_;
+    }
   } catch (const std::exception &e) {
     custom_controller_context_.controller_mtx.unlock();
     std::string error_msg =
@@ -270,6 +287,8 @@ Status PolymetisControllerServerImpl::SetController(
     resetControllerContext();
     std::swap(custom_controller_context_.custom_controller, new_controller);
     custom_controller_context_.status = READY;
+    ++mozi_generation_;mozi_revision_=0;mozi_first_revision_=UINT64_MAX;
+    if(mozi_policy_trace_)mozi_policy_trace_->emit(1,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
 
     custom_controller_context_.controller_mtx.unlock();
     spdlog::info("Loaded new controller.");
@@ -324,6 +343,8 @@ Status PolymetisControllerServerImpl::UpdateController(
       custom_controller_context_.controller_mtx.lock();
       interval->set_start(robot_state_buffer_.size());
       custom_controller_context_.custom_controller->param_dict_update_module();
+      ++mozi_revision_;
+      if(mozi_policy_trace_)mozi_policy_trace_->emit(2,mozi_generation_,mozi_revision_,interval->start());
       custom_controller_context_.controller_mtx.unlock();
 
     } catch (const std::exception &e) {

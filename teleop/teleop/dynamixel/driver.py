@@ -1,7 +1,9 @@
+import atexit
 import os
 import time
 from threading import Event, Lock, Thread
-from typing import Protocol, Sequence
+from typing import Optional, Protocol, Sequence
+import weakref
 
 import numpy as np
 from dynamixel_sdk.group_sync_read import GroupSyncRead
@@ -22,8 +24,37 @@ ADDR_GOAL_POSITION = 116
 LEN_GOAL_POSITION = 4
 ADDR_PRESENT_POSITION = 132
 LEN_PRESENT_POSITION = 4
+ADDR_OPERATING_MODE = 11
+LEN_OPERATING_MODE = 1
+ADDR_GOAL_CURRENT = 102
+LEN_GOAL_CURRENT = 2
+ADDR_KP_P = 84
+LEN_KP_P = 2
+ADDR_KP_I = 82
+LEN_KP_I = 2
+ADDR_KP_D = 80
+LEN_KP_D = 2
 TORQUE_ENABLE = 1
 TORQUE_DISABLE = 0
+OPERATING_MODE_CURRENT_POSITION = 5
+DEFAULT_GOAL_CURRENT_MA = 600
+
+
+_driver_refs = []
+
+
+def _cleanup_all_drivers():
+    """Best-effort torque shutdown for live real drivers at process exit."""
+    for driver_ref in _driver_refs:
+        driver = driver_ref()
+        if driver is not None and not getattr(driver, "_closed", True):
+            try:
+                driver.set_torque_mode(False)
+            except Exception:
+                pass
+
+
+atexit.register(_cleanup_all_drivers)
 
 
 class DynamixelDriverProtocol(Protocol):
@@ -59,6 +90,17 @@ class DynamixelDriverProtocol(Protocol):
         """
         ...
 
+    def configure_damping(
+        self,
+        torque_enable: Sequence[int],
+        kp_p: Optional[Sequence[int]] = None,
+        kp_i: Optional[Sequence[int]] = None,
+        kp_d: Optional[Sequence[int]] = None,
+        goal_position_rad: Optional[Sequence[float]] = None,
+    ):
+        """Configure current-based position control damping."""
+        ...
+
     def close(self):
         """Close the driver."""
 
@@ -68,6 +110,15 @@ class FakeDynamixelDriver(DynamixelDriverProtocol):
         self._ids = ids
         self._joint_angles = np.zeros(len(ids), dtype=int)
         self._torque_enabled = False
+        self._config = {
+            "operating_mode": [0] * len(ids),
+            "goal_current": [0] * len(ids),
+            "kp_p": [0] * len(ids),
+            "kp_i": [0] * len(ids),
+            "kp_d": [0] * len(ids),
+            "goal_position_rad": None,
+            "torque_enable": [0] * len(ids),
+        }
 
     def set_joints(self, joint_angles: Sequence[float]):
         if len(joint_angles) != len(self._ids):
@@ -87,8 +138,41 @@ class FakeDynamixelDriver(DynamixelDriverProtocol):
     def get_joints(self) -> np.ndarray:
         return self._joint_angles.copy()
 
+    def configure_damping(
+        self,
+        torque_enable: Sequence[int],
+        kp_p: Optional[Sequence[int]] = None,
+        kp_i: Optional[Sequence[int]] = None,
+        kp_d: Optional[Sequence[int]] = None,
+        goal_position_rad: Optional[Sequence[float]] = None,
+    ):
+        n = len(self._ids)
+        values = {
+            "torque_enable": torque_enable,
+            "kp_p": kp_p,
+            "kp_i": kp_i,
+            "kp_d": kp_d,
+            "goal_position_rad": goal_position_rad,
+        }
+        for name, value in values.items():
+            if value is not None and len(value) != n:
+                raise ValueError(f"{name} must contain one value per servo")
+        if any(value not in (0, 1) for value in torque_enable):
+            raise ValueError("torque_enable values must be 0 or 1")
+
+        self._config["operating_mode"] = [OPERATING_MODE_CURRENT_POSITION] * n
+        self._config["goal_current"] = [DEFAULT_GOAL_CURRENT_MA] * n
+        self._config["torque_enable"] = list(torque_enable)
+        for name, value in (("kp_p", kp_p), ("kp_i", kp_i), ("kp_d", kp_d)):
+            if value is not None:
+                self._config[name] = list(value)
+        if goal_position_rad is not None:
+            self._config["goal_position_rad"] = list(goal_position_rad)
+            self._joint_angles = np.array(goal_position_rad, dtype=float)
+        self._torque_enabled = any(value == 1 for value in torque_enable)
+
     def close(self):
-        pass
+        self.set_torque_mode(False)
 
 
 class DynamixelDriver(DynamixelDriverProtocol):
@@ -106,6 +190,7 @@ class DynamixelDriver(DynamixelDriverProtocol):
         self._joint_angles = None
         self._read_error = None
         self._lock = Lock()
+        self._closed = False
 
         # Initialize the port handler, packet handler, and group sync read/write
         self._portHandler = PortHandler(port)
@@ -149,6 +234,39 @@ class DynamixelDriver(DynamixelDriverProtocol):
 
         self._stop_thread = Event()
         self._start_reading_thread()
+        _driver_refs.append(weakref.ref(self))
+
+    @staticmethod
+    def _validate_values(name: str, values: Sequence[int], count: int):
+        if len(values) != count:
+            raise ValueError(f"{name} must contain one value per servo")
+
+    def _write_values_to_addr(
+        self, addr: int, value_length: int, values: Sequence[int]
+    ):
+        """Sync-write one integer field for all configured motors."""
+        self._validate_values("values", values, len(self._ids))
+        group_sync_write = GroupSyncWrite(
+            self._portHandler, self._packetHandler, addr, value_length
+        )
+        with self._lock:
+            try:
+                for dxl_id, value in zip(self._ids, values):
+                    param = [
+                        (int(value) >> (8 * byte_index)) & 0xFF
+                        for byte_index in range(value_length)
+                    ]
+                    if not group_sync_write.addParam(dxl_id, param):
+                        raise RuntimeError(
+                            f"Failed to add Dynamixel ID {dxl_id} for address {addr}"
+                        )
+                dxl_comm_result = group_sync_write.txPacket()
+                if dxl_comm_result != COMM_SUCCESS:
+                    raise RuntimeError(
+                        f"Failed to syncwrite address {addr}: {dxl_comm_result}"
+                    )
+            finally:
+                group_sync_write.clearParam()
 
     def set_joints(self, joint_angles: Sequence[float]):
         if len(joint_angles) != len(self._ids):
@@ -206,6 +324,88 @@ class DynamixelDriver(DynamixelDriverProtocol):
 
         self._torque_enabled = enable
 
+    def configure_damping(
+        self,
+        torque_enable: Sequence[int],
+        kp_p: Optional[Sequence[int]] = None,
+        kp_i: Optional[Sequence[int]] = None,
+        kp_d: Optional[Sequence[int]] = None,
+        goal_position_rad: Optional[Sequence[float]] = None,
+    ):
+        """Configure current-based position-control damping (operating mode 5)."""
+        count = len(self._ids)
+        values = {
+            "torque_enable": torque_enable,
+            "kp_p": kp_p,
+            "kp_i": kp_i,
+            "kp_d": kp_d,
+            "goal_position_rad": goal_position_rad,
+        }
+        for name, value in values.items():
+            if value is not None:
+                self._validate_values(name, value, count)
+        if any(value not in (0, 1) for value in torque_enable):
+            raise ValueError("torque_enable values must be 0 or 1")
+
+        # Operating mode changes require torque off. Keep the device torque-free
+        # until all current and gain fields have been written successfully.
+        self.set_torque_mode(False)
+        try:
+            self._write_values_to_addr(
+                ADDR_OPERATING_MODE,
+                LEN_OPERATING_MODE,
+                [OPERATING_MODE_CURRENT_POSITION] * count,
+            )
+            time.sleep(0.01)
+            self._write_values_to_addr(
+                ADDR_GOAL_CURRENT,
+                LEN_GOAL_CURRENT,
+                [DEFAULT_GOAL_CURRENT_MA] * count,
+            )
+            time.sleep(0.01)
+
+            for addr, length, value in (
+                (ADDR_KP_P, LEN_KP_P, kp_p),
+                (ADDR_KP_I, LEN_KP_I, kp_i),
+                (ADDR_KP_D, LEN_KP_D, kp_d),
+            ):
+                if value is not None:
+                    self._write_values_to_addr(addr, length, value)
+            time.sleep(0.01)
+
+            # Enabling torque resets the motor's goal position, so the damping
+            # target must be sent only after the per-joint torque mask.
+            with self._lock:
+                for dxl_id, enabled in zip(self._ids, torque_enable):
+                    torque_value = TORQUE_ENABLE if enabled == 1 else TORQUE_DISABLE
+                    dxl_comm_result, dxl_error = self._packetHandler.write1ByteTxRx(
+                        self._portHandler,
+                        dxl_id,
+                        ADDR_TORQUE_ENABLE,
+                        torque_value,
+                    )
+                    if dxl_comm_result != COMM_SUCCESS or dxl_error != 0:
+                        raise RuntimeError(
+                            f"Failed to set damping torque for Dynamixel ID {dxl_id}"
+                        )
+            self._torque_enabled = any(value == 1 for value in torque_enable)
+            time.sleep(0.01)
+
+            if goal_position_rad is not None:
+                goal_pulses = [
+                    int(angle * 2048 / np.pi) for angle in goal_position_rad
+                ]
+                self._write_values_to_addr(
+                    ADDR_GOAL_POSITION, LEN_GOAL_POSITION, goal_pulses
+                )
+        except Exception:
+            # A partially configured bus must never be left energized.
+            try:
+                self.set_torque_mode(False)
+            except Exception:
+                pass
+            raise
+
     def _start_reading_thread(self):
         self._reading_thread = Thread(target=self._read_joint_angles)
         self._reading_thread.daemon = True
@@ -260,9 +460,21 @@ class DynamixelDriver(DynamixelDriverProtocol):
         return _j / 2048.0 * np.pi
 
     def close(self):
+        if self._closed:
+            return
+        torque_error = None
+        try:
+            self.set_torque_mode(False)
+        except Exception as exc:
+            torque_error = exc
         self._stop_thread.set()
         self._reading_thread.join(timeout=1.0)
         self._portHandler.closePort()
+        self._closed = True
+        if torque_error is not None:
+            raise RuntimeError(
+                "Failed to disable Dynamixel torque while closing"
+            ) from torque_error
 
 
 def main():

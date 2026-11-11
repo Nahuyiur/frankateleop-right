@@ -5,6 +5,7 @@
 import io
 from typing import Dict, Generator, List, Tuple
 import time
+from polymetis._mozi_timing import timed, span, note
 import tempfile
 import threading
 import atexit
@@ -170,6 +171,7 @@ class BaseRobotInterface:
             atexit.unregister(cancel_rpc)
             return results
 
+    @timed("state_read_rpc")
     def get_robot_state(self) -> RobotState:
         """Returns the latest RobotState."""
         return self.grpc_connection.GetRobotState(EMPTY)
@@ -180,6 +182,7 @@ class BaseRobotInterface:
         assert log_interval.start != -1, "Cannot find previous episode."
         return log_interval
 
+    @timed("policy_status_rpc")
     def is_running_policy(self) -> bool:
         log_interval = self.grpc_connection.GetEpisodeInterval(EMPTY)
         return (
@@ -206,16 +209,19 @@ class BaseRobotInterface:
         blocking: bool = True,
         timeout: float = None,
         use_mirror: bool = False,
+        return_log: bool = True,
     ) -> List[RobotState]:
         """Sends the ScriptableTorchPolicy to the server.
 
         Args:
             torch_policy: An instance of ScriptableTorchPolicy to control the robot.
-            blocking: If True, blocks until the policy is finished executing, then returns the list of RobotStates.
+            blocking: If True, waits until the policy is finished executing.
             timeout: Amount of time (in seconds) to wait before throwing a TimeoutError.
+            return_log: Download the completed policy's state log when blocking.
+                False still waits for completion, but avoids a bulk diagnostic RPC.
 
         Returns:
-            If `blocking`, returns a list of RobotState objects. Otherwise, returns None.
+            If `blocking` and `return_log`, returns RobotStates; otherwise None.
 
         """
         if use_mirror:
@@ -223,17 +229,23 @@ class BaseRobotInterface:
                 self.mirror_sim_robot
             ), "Must call setup_mirror_for_forward before forward methods can be used on mirror sim"
             return self.mirror_sim_robot.send_torch_policy(
-                torch_policy, blocking, timeout, use_mirror=False
+                torch_policy, blocking, timeout, use_mirror=False, return_log=return_log
             )
         start_time = time.time()
 
         # Script & chunk policy
-        scripted_policy = torch.jit.script(torch_policy)
+        with span("policy_jit"):
+            scripted_policy = torch.jit.script(torch_policy)
         msg_generator = self._get_msg_generator(scripted_policy)
 
         # Send policy as stream
         try:
-            log_interval = self.grpc_connection.SetController(msg_generator())
+            with span("set_controller_rpc_including_serialization"):
+                log_interval = self.grpc_connection.SetController(msg_generator())
+            note("policy_episode_begin", int(log_interval.start))
+            goal = getattr(torch_policy, "joint_pos_desired", None)
+            self._teleop_accepted_joint_goal = goal.detach().cpu().tolist() if isinstance(goal, torch.Tensor) else None
+            self._teleop_goal_episode = int(log_interval.start)
         except grpc.RpcError as e:
             raise grpc.RpcError(f"POLYMETIS SERVER ERROR --\n{e.details()}") from None
 
@@ -246,7 +258,11 @@ class BaseRobotInterface:
                     raise TimeoutError("Operation timed out.")
                 time.sleep(1.0 / POLLING_RATE)
 
-            # Retrieve robot state log
+            # Home callers do not consume this diagnostic copy. The server's
+            # state buffer and independent ROS recording remain unchanged.
+            if not return_log:
+                return None
+            # Retrieve robot state log when explicitly requested (legacy default).
             if timeout is not None:
                 time_passed = time.time() - start_time
                 timeout = timeout - time_passed
@@ -263,16 +279,27 @@ class BaseRobotInterface:
 
         """
         # Script & chunk params
-        scripted_params = torch.jit.script(ParamDictContainer(param_dict))
+        with span("parameter_jit"):
+            scripted_params = torch.jit.script(ParamDictContainer(param_dict))
         msg_generator = self._get_msg_generator(scripted_params)
 
         # Send params container as stream
         try:
-            update_interval = self.grpc_connection.UpdateController(msg_generator())
+            with span("update_controller_rpc_including_serialization"):
+                update_interval = self.grpc_connection.UpdateController(msg_generator())
         except grpc.RpcError as e:
             raise grpc.RpcError(f"POLYMETIS SERVER ERROR --\n{e.details()}") from None
-        episode_interval = self.grpc_connection.GetEpisodeInterval(EMPTY)
+        with span("episode_interval_rpc"):
+            episode_interval = self.grpc_connection.GetEpisodeInterval(EMPTY)
 
+        # Existing API marks the buffer index during parameter update, not a
+        # guarantee of the first forward tick. Keep that distinction explicit.
+        if "joint_pos_desired" in param_dict:
+            self._teleop_accepted_joint_goal = param_dict["joint_pos_desired"].detach().cpu().tolist()
+            self._teleop_goal_episode = int(episode_interval.start)
+        note("parameter_update_log_index", int(update_interval.start))
+        note("policy_episode_begin", int(episode_interval.start))
+        note("parameter_update_index_semantics", "server_update_marker_not_first_forward")
         return update_interval.start - episode_interval.start
 
     def terminate_current_policy(
@@ -379,6 +406,7 @@ class RobotInterface(BaseRobotInterface):
         time_to_go = torch.max(joint_pos_diff / joint_vel_limits * 8.0)
         return max(time_to_go, self.time_to_go_default)
 
+    @timed("inverse_kinematics")
     def solve_inverse_kinematics(
         self,
         position: torch.Tensor,
@@ -392,12 +420,16 @@ class RobotInterface(BaseRobotInterface):
             position, orientation, rest_pose=q0
         )
 
+        note("ik_initial_q", q0.detach().cpu().tolist())
+        note("ik_output_q", joint_pos_output.detach().cpu().tolist())
         # Check result
         pos_output, quat_output = self.robot_model.forward_kinematics(joint_pos_output)
         pose_desired = T.from_rot_xyz(R.from_quat(orientation), position)
         pose_output = T.from_rot_xyz(R.from_quat(quat_output), pos_output)
         err = torch.linalg.norm((pose_desired * pose_output.inv()).as_twist())
         ik_sol_found = err < tol
+        note("ik_pose_error", float(err))
+        note("ik_success", bool(ik_sol_found))
 
         return joint_pos_output, ik_sol_found
 
@@ -430,6 +462,7 @@ class RobotInterface(BaseRobotInterface):
     End-effector computation methods
     """
 
+    @timed("state_and_forward_kinematics")
     def get_ee_pose(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Computes forward kinematics on the current joint angles.
 
@@ -659,15 +692,16 @@ class RobotInterface(BaseRobotInterface):
         Runs an non-blocking Cartesian impedance controller.
         The desired EE pose can be updated using `update_desired_ee_pose`
         """
-        torch_policy = toco.policies.HybridJointImpedanceControl(
-            joint_pos_current=self.get_joint_positions(),
-            Kq=self.Kq_default,
-            Kqd=self.Kqd_default,
-            Kx=self.Kx_default if Kx is None else Kx,
-            Kxd=self.Kxd_default if Kxd is None else Kxd,
-            robot_model=self.robot_model,
-            ignore_gravity=self.use_grav_comp,
-        )
+        with span("cartesian_policy_construct"):
+            torch_policy = toco.policies.HybridJointImpedanceControl(
+                joint_pos_current=self.get_joint_positions(),
+                Kq=self.Kq_default,
+                Kqd=self.Kqd_default,
+                Kx=self.Kx_default if Kx is None else Kx,
+                Kxd=self.Kxd_default if Kxd is None else Kxd,
+                robot_model=self.robot_model,
+                ignore_gravity=self.use_grav_comp,
+            )
 
         return self.send_torch_policy(torch_policy=torch_policy, blocking=False)
 
@@ -707,6 +741,9 @@ class RobotInterface(BaseRobotInterface):
             )
             return -1
 
+        note("ee_goal_position_m", ee_pos_desired.detach().cpu().tolist())
+        note("ee_goal_quaternion_xyzw", ee_quat_desired.detach().cpu().tolist())
+        note("measured_q_at_target", joint_pos_current.detach().cpu().tolist())
         return self.update_desired_joint_positions(joint_pos_desired)
 
     def start_joint_velocity_control(

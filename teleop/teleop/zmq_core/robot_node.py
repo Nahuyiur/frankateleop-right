@@ -1,4 +1,5 @@
 import pickle
+import os
 import logging
 import threading
 import time
@@ -8,9 +9,24 @@ import numpy as np
 import zmq
 
 from teleop.robots.robot import Robot
+from polymetis._mozi_timing import begin_request, end_request
 
 DEFAULT_ROBOT_PORT = 6000
 LOGGER = logging.getLogger("franka_zmq_node")
+
+
+def with_replay_feedback(robot, result):
+    """Report the accepted policy target, never substitute measured joints for IK."""
+    if result is not None and (not isinstance(result, dict) or result.get('status') == 'hold' or 'error' in result):
+        return result
+    goal = getattr(getattr(robot, 'robot', None), '_teleop_accepted_joint_goal', None)
+    try:
+        q = np.asarray(goal, dtype=float)
+        available = q.shape == (7,) and np.isfinite(q).all()
+    except (TypeError, ValueError):
+        available = False
+    return dict(result or {}, replay_feedback=dict(ik_joints=q.tolist() if available else None,
+                source='accepted_policy_joint_target' if available else 'unavailable'))
 
 
 class ZMQServerRobot:
@@ -31,8 +47,22 @@ class ZMQServerRobot:
         print(debug_message)
         self._timout_message = f"Timeout in Robot Server, Robot: {robot}"
         self._last_idle_log = 0.0
+        self._metrics_lock = threading.Lock()
+        self._request_count = 0
+        self._command_count = 0
+        self._command_timestamps: list[float] = []
+        self._last_command_latency_ms = 0.0
         self._socket.bind(addr)
         self._stop_event = threading.Event()
+        self._replay_token = None
+        self._replay_original_mode = None
+        self._feedback = None
+        if os.environ.get('MOZI_RPC_FEEDBACK', '0') == '1':
+            from teleop.zmq_core.feedback_server import FeedbackServer
+            if not callable(getattr(robot, 'get_feedback_observations', None)):
+                raise TypeError('robot lacks memory-only feedback snapshots')
+            self._feedback = FeedbackServer(robot, int(port) + 100)
+            self._feedback.start()
 
     def serve(self) -> None:
         """Serve the leader robot state over ZMQ."""
@@ -41,14 +71,69 @@ class ZMQServerRobot:
             try:
                 # Wait for next request from client
                 message = self._socket.recv()
-                request = pickle.loads(message)
-
+                method = "<decode>"
+                timing_token = None
                 try:
-                    # Call the appropriate method based on the request
+                    # A malformed or incompatible pickle is a failed request,
+                    # not a reason to terminate the robot command server.
+                    request = pickle.loads(message)
+                    if not isinstance(request, dict):
+                        raise ValueError("robot request must be a dictionary")
+                    trace_id = request.get("mozi_trace_id")
+                    if isinstance(trace_id, str) and len(trace_id) <= 100:
+                        timing_token = begin_request(trace_id)
                     method = request.get("method")
                     args = request.get("args", {})
+                    if not isinstance(args, dict):
+                        raise ValueError("robot request args must be a dictionary")
                     result: Any
-                    if method == "num_dofs":
+                    request_started = time.monotonic()
+                    token = args.pop("replay_token", None)
+                    motion_methods = {"command_joint_state", "command_ee_pose", "move_to_joint_positions",
+                                      "command_replay_joints", "set_replay_mode", "release_replay",
+                                      "ensure_cartesian_teleop", "command_gripper", "configure_tracking_impedance"}
+                    if method in motion_methods:
+                        if self._replay_token is not None and token != self._replay_token:
+                            raise RuntimeError("robot is reserved for episode replay")
+                        if token is not None and token != self._replay_token:
+                            raise RuntimeError("replay reservation is no longer valid")
+                        if method in {"set_replay_mode", "command_replay_joints", "release_replay", "configure_tracking_impedance"} and not self._replay_token:
+                            raise RuntimeError("replay reservation required")
+                    if method == "get_replay_capabilities":
+                        result = {"version": 1, "recording_observations": True, "reserved": self._replay_token is not None, "replay_feedback": True, "tracking_impedance": 3}
+                    elif method == "reserve_replay":
+                        if not isinstance(token, str) or not token:
+                            raise ValueError("replay token required")
+                        if self._replay_token not in (None, token):
+                            raise RuntimeError("robot is already reserved for replay")
+                        if self._replay_token is None:
+                            self._replay_original_mode = self._robot.get_control_mode()
+                            self._replay_token = token
+                        result = {"ok": True}
+                    elif method == "get_tracking_impedance":
+                        if args:
+                            raise ValueError("get_tracking_impedance accepts no arguments")
+                        from teleop.tracking_impedance import snapshot
+                        result = snapshot(self._robot)
+                    elif method == "configure_tracking_impedance":
+                        if set(args) != {"gains","reference","velocity_mode"}:
+                            raise ValueError("configure_tracking_impedance requires gains, fixed trajectory reference and velocity_mode")
+                        from teleop.tracking_impedance import configure
+                        result = configure(self._robot, args["gains"], args["reference"], args["velocity_mode"])
+                    elif method == "set_replay_mode":
+                        result = self._robot.set_replay_mode(**args)
+                    elif method == "command_replay_joints":
+                        result = self._robot.command_replay_joints(**args)
+                    elif method == "release_replay":
+                        # Restore a controller anchored at the current measured pose.
+                        # Keep the reservation if restoring fails: fail closed.
+                        from teleop.tracking_impedance import clear
+                        clear(self._robot)
+                        self._robot.set_replay_mode(self._replay_original_mode)
+                        self._replay_token = None
+                        self._replay_original_mode = None
+                        result = {"ok": True}
+                    elif method == "num_dofs":
                         result = self._robot.num_dofs()
                     elif method == "get_control_mode":
                         if hasattr(self._robot, "get_control_mode"):
@@ -64,6 +149,38 @@ class ZMQServerRobot:
                             result = {"error": f"Robot {self._robot} does not support command_ee_pose"}
                         else:
                             result = self._robot.command_ee_pose(**args)
+                        if self._replay_token is not None and token == self._replay_token:
+                            result = with_replay_feedback(self._robot, result)
+                        with self._metrics_lock:
+                            now = time.monotonic()
+                            self._command_count += 1
+                            self._command_timestamps.append(now)
+                            cutoff = now - 5.0
+                            self._command_timestamps = [t for t in self._command_timestamps if t >= cutoff]
+                            self._last_command_latency_ms = (now - request_started) * 1000.0
+                    elif method == "get_metrics":
+                        with self._metrics_lock:
+                            now = time.monotonic()
+                            cutoff = now - 5.0
+                            self._command_timestamps = [t for t in self._command_timestamps if t >= cutoff]
+                            window_s = max(1e-3, min(5.0, now - self._command_timestamps[0])) if self._command_timestamps else 0.0
+                            result = {
+                                "pid": __import__("os").getpid(),
+                                "nice": __import__("os").getpriority(__import__("os").PRIO_PROCESS, 0),
+                                "requests_total": self._request_count,
+                                "command_ee_pose_total": self._command_count,
+                                "command_ee_pose_hz": len(self._command_timestamps) / window_s if window_s else 0.0,
+                                "last_command_age_ms": (now - self._command_timestamps[-1]) * 1000.0 if self._command_timestamps else None,
+                                "last_command_latency_ms": self._last_command_latency_ms,
+                            }
+                    elif method == "command_gripper":
+                        if not hasattr(self._robot, "command_gripper"):
+                            raise RuntimeError("robot does not support command_gripper")
+                        result = self._robot.command_gripper(**args)
+                    elif method == "ensure_cartesian_teleop":
+                        if not hasattr(self._robot, "ensure_cartesian_teleop"):
+                            raise RuntimeError("robot does not support ensure_cartesian_teleop")
+                        result = self._robot.ensure_cartesian_teleop(**args)
                     elif method == "move_to_joint_positions":
                         if not hasattr(self._robot, "move_to_joint_positions"):
                             result = {"error": f"Robot {self._robot} does not support move_to_joint_positions"}
@@ -87,7 +204,11 @@ class ZMQServerRobot:
                     result = {"error": f"{type(exc).__name__}: {exc}"}
                     LOGGER.warning("robot request failed method=%s error=%s", method, exc)
 
+                if timing_token is not None:
+                    result = {"__mozi_trace_v1__": end_request(timing_token), "result": result}
                 self._socket.send(pickle.dumps(result))
+                with self._metrics_lock:
+                    self._request_count += 1
             except zmq.Again:
                 now = time.monotonic()
                 if now - self._last_idle_log >= 5.0:
@@ -97,6 +218,8 @@ class ZMQServerRobot:
     def stop(self) -> None:
         """Signal the server to stop serving."""
         self._stop_event.set()
+        if self._feedback is not None:
+            self._feedback.stop()
 
 
 class ZMQClientRobot(Robot):

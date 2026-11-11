@@ -8,6 +8,7 @@
 #include <chrono>
 #include <memory>
 #include <thread>
+#include "mozi_fault_window.hpp"
 
 #include "yaml-cpp/yaml.h"
 
@@ -26,6 +27,7 @@
 
 class FrankaTorqueControlClient {
 private:
+  std::unique_ptr<mozi::FaultWindow> mozi_capture_;
   void updateServerCommand(const franka::RobotState &libfranka_robot_state,
                            std::array<double, NUM_DOFS> &torque_out);
   void checkStateLimits(const franka::RobotState &libfranka_robot_state,

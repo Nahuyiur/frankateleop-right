@@ -1,0 +1,297 @@
+{
+  "selected_best_by": "user",
+  "run_id": "web-20261112-003058-1f541e9ff415",
+  "sequence": 8,
+  "config": {
+    "label": "08-20261112-003057-双臂-Kx900r20-Kxd40r3-Kq50_40_60_30_40_30_15",
+    "notes": "末端：genrobot-base（沿用 02 已核验配置；质量/质心未实时读取）。\n双臂：m_ee=0.591 kg，m_load=0 kg，质心=[0.019, 0.000207, 0.056] m。\n参数读取时快照 · 左 00:30:57：max|dq|=0.00114 rad/s，FCI=100%，夹爪=90 mm；右 00:30:57：max|dq|=0.001 rad/s，FCI=100%，夹爪=90 mm。\n当前 TCP：双臂 p=[0.044, 0, 0.19] m，R=I（与核验记录一致）。\n本次请求：双臂 Kx=[900, 900, 900, 20, 20, 20]；Kxd=[40, 40, 40, 3, 3, 3]；Kq=[50, 40, 60, 30, 40, 30, 15]；其余同 01 基准。\n固定轨迹 20.344 s / 1×；HybridJointImpedance 1000 Hz，目标速度=DIK 目标按轨迹时间差分（±1 rad/s，低通 20 ms，变化率 10 rad/s²，50 ms 无新目标归零）；严格静止时软件前馈=0，内部重力补偿保留。",
+    "gains": {
+      "left": {
+        "Kq": [
+          50.0,
+          40.0,
+          60.0,
+          30.0,
+          40.0,
+          30.0,
+          15.0
+        ],
+        "Kqd": [
+          4.0,
+          6.0,
+          5.0,
+          5.0,
+          3.0,
+          2.0,
+          1.0
+        ],
+        "Kx": [
+          900.0,
+          900.0,
+          900.0,
+          20.0,
+          20.0,
+          20.0
+        ],
+        "Kxd": [
+          40.0,
+          40.0,
+          40.0,
+          3.0,
+          3.0,
+          3.0
+        ]
+      },
+      "right": {
+        "Kq": [
+          50.0,
+          40.0,
+          60.0,
+          30.0,
+          40.0,
+          30.0,
+          15.0
+        ],
+        "Kqd": [
+          4.0,
+          6.0,
+          5.0,
+          5.0,
+          3.0,
+          2.0,
+          1.0
+        ],
+        "Kx": [
+          900.0,
+          900.0,
+          900.0,
+          20.0,
+          20.0,
+          20.0
+        ],
+        "Kxd": [
+          40.0,
+          40.0,
+          40.0,
+          3.0,
+          3.0,
+          3.0
+        ]
+      }
+    }
+  },
+  "tracking": {
+    "arms": {
+      "left": {
+        "samples": 980,
+        "eligible_samples": 980,
+        "rejected": {},
+        "reference_start_offset_ms": 3.862812,
+        "position_mm": {
+          "rmse": 5.854222455592159,
+          "p95": 9.466073610877306,
+          "max": 16.387505201241748
+        },
+        "orientation_deg": {
+          "rmse": 1.656236433553838,
+          "p95": 2.9962919951054166,
+          "max": 4.666979739666238
+        },
+        "measured_hz": 48.20747254508606,
+        "max_gap_ms": 41.039744,
+        "coverage_ok": true
+      },
+      "right": {
+        "samples": 1001,
+        "eligible_samples": 1001,
+        "rejected": {},
+        "reference_start_offset_ms": 3.862812,
+        "position_mm": {
+          "rmse": 4.979447948699707,
+          "p95": 8.065288062162534,
+          "max": 16.992407705678755
+        },
+        "orientation_deg": {
+          "rmse": 2.088413749091264,
+          "p95": 3.1700488483601323,
+          "max": 12.644307789157946
+        },
+        "measured_hz": 49.193342528906456,
+        "max_gap_ms": 41.030028,
+        "coverage_ok": true
+      }
+    },
+    "record_counts": {
+      "phase": 7,
+      "telemetry": 5177,
+      "measured": 2438,
+      "controller": 498,
+      "controller_parameters": 1,
+      "target": 4230
+    },
+    "alignment": "latest scheduled EEF target at measured source_ns (zero-order hold); no lag fitting",
+    "reference": "dispatched scheduled command, not proof of controller execution; see native ack and IK telemetry",
+    "comparable": true
+  },
+  "controller_parameters": {
+    "left": {
+      "gains": {
+        "Kq": [
+          50.0,
+          40.0,
+          60.0,
+          30.0,
+          40.0,
+          30.0,
+          15.0
+        ],
+        "Kqd": [
+          4.0,
+          6.0,
+          5.0,
+          5.0,
+          3.0,
+          2.0,
+          1.0
+        ],
+        "Kx": [
+          900.0,
+          900.0,
+          900.0,
+          20.0,
+          20.0,
+          20.0
+        ],
+        "Kxd": [
+          40.0,
+          40.0,
+          40.0,
+          3.0,
+          3.0,
+          3.0
+        ]
+      },
+      "formula": "τ_policy = Kp(q)(q_des − q) + Kd(q)(dq_des − dq) + τ_ff; Kp(q) = diag(Kq) + Jᵀdiag(Kx)J; Kd(q) = diag(Kqd) + Jᵀdiag(Kxd)J; τ_ff = ID(q,dq,0) − ID(q,0,0)",
+      "controller": "TrackingHybridJointImpedanceControl",
+      "hz": 1000,
+      "velocity_reference": {
+        "version": 1,
+        "mode": "validated_trajectory_joint_difference",
+        "filter_tau_s": 0.02,
+        "max_abs_rad_s": 1.0,
+        "max_accel_rad_s2": 10.0,
+        "stale_fade_start_s": 0.03,
+        "stale_zero_s": 0.05,
+        "first_target": "zero",
+        "timebase": "fixed_trajectory_source_ns_at_1x"
+      },
+      "static_software_feedforward_Nm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "reference": {
+        "sha256": "316715e2858e2d5838a06f249dbeeeaa081d96a6e05c6e44f2680e81e7894261",
+        "count": 1758,
+        "accepted": 0
+      },
+      "source": "float32 gains in policy submitted to Polymetis; SetController acknowledged",
+      "software_sha256": {
+        "/home/pnp/frankateleop/teleop/teleop/tracking_impedance.py": "dba8637b27899abc1184b2f3821fa9aa2ab792560185c37a2bc208be10481edc",
+        "/home/pnp/frankateleop/teleop/teleop/robots/fr3.py": "42c8349a5f9ccb1a586b74ba098e9b75c0cedefb6eb8c9bb617a774fcce2bd1f",
+        "/home/pnp/frankateleop/polymetis/polymetis/python/polymetis/robot_interface.py": "050a0434b464e7a4050e257ba800e4235f7e0f1564ad1e20461674d144cb5a42",
+        "/home/pnp/frankateleop/teleop/teleop/tracking_policy.py": "d79e3883af489ec7eae554f42ec3cc7d681b316a7f36343352db131b2eadb943",
+        "/home/pnp/frankateleop/polymetis/polymetis/python/torchcontrol/policies/impedance.py": "931392d148aeccb034412b0669a0416564c8368a6b640327903278db0e2356da",
+        "/home/pnp/frankateleop/teleop/teleop/tracking_gains.py": "8cf0ad94eebb0d2c02ec636796e9eaf61dce9b30fa630dd0c0eb833549c21222",
+        "/home/pnp/frankateleop/polymetis/polymetis/python/torchcontrol/modules/feedback.py": "1a2afcb7afc89512d435348f9cb209e10275875d77b643f3a3ab847f59ba3acb"
+      },
+      "policy_episode": 339568,
+      "applied_ns": 1794414666004598386,
+      "last_velocity_command": null
+    },
+    "right": {
+      "gains": {
+        "Kq": [
+          50.0,
+          40.0,
+          60.0,
+          30.0,
+          40.0,
+          30.0,
+          15.0
+        ],
+        "Kqd": [
+          4.0,
+          6.0,
+          5.0,
+          5.0,
+          3.0,
+          2.0,
+          1.0
+        ],
+        "Kx": [
+          900.0,
+          900.0,
+          900.0,
+          20.0,
+          20.0,
+          20.0
+        ],
+        "Kxd": [
+          40.0,
+          40.0,
+          40.0,
+          3.0,
+          3.0,
+          3.0
+        ]
+      },
+      "formula": "τ_policy = Kp(q)(q_des − q) + Kd(q)(dq_des − dq) + τ_ff; Kp(q) = diag(Kq) + Jᵀdiag(Kx)J; Kd(q) = diag(Kqd) + Jᵀdiag(Kxd)J; τ_ff = ID(q,dq,0) − ID(q,0,0)",
+      "controller": "TrackingHybridJointImpedanceControl",
+      "hz": 1000,
+      "velocity_reference": {
+        "version": 1,
+        "mode": "validated_trajectory_joint_difference",
+        "filter_tau_s": 0.02,
+        "max_abs_rad_s": 1.0,
+        "max_accel_rad_s2": 10.0,
+        "stale_fade_start_s": 0.03,
+        "stale_zero_s": 0.05,
+        "first_target": "zero",
+        "timebase": "fixed_trajectory_source_ns_at_1x"
+      },
+      "static_software_feedforward_Nm": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "reference": {
+        "sha256": "316715e2858e2d5838a06f249dbeeeaa081d96a6e05c6e44f2680e81e7894261",
+        "count": 1758,
+        "accepted": 0
+      },
+      "source": "float32 gains in policy submitted to Polymetis; SetController acknowledged",
+      "software_sha256": {
+        "/home/pnp/frankateleop/teleop/teleop/tracking_impedance.py": "dba8637b27899abc1184b2f3821fa9aa2ab792560185c37a2bc208be10481edc",
+        "/home/pnp/frankateleop/teleop/teleop/robots/fr3.py": "42c8349a5f9ccb1a586b74ba098e9b75c0cedefb6eb8c9bb617a774fcce2bd1f",
+        "/home/pnp/frankateleop/polymetis/polymetis/python/polymetis/robot_interface.py": "050a0434b464e7a4050e257ba800e4235f7e0f1564ad1e20461674d144cb5a42",
+        "/home/pnp/frankateleop/teleop/teleop/tracking_policy.py": "d79e3883af489ec7eae554f42ec3cc7d681b316a7f36343352db131b2eadb943",
+        "/home/pnp/frankateleop/polymetis/polymetis/python/torchcontrol/policies/impedance.py": "931392d148aeccb034412b0669a0416564c8368a6b640327903278db0e2356da",
+        "/home/pnp/frankateleop/teleop/teleop/tracking_gains.py": "8cf0ad94eebb0d2c02ec636796e9eaf61dce9b30fa630dd0c0eb833549c21222",
+        "/home/pnp/frankateleop/polymetis/polymetis/python/torchcontrol/modules/feedback.py": "1a2afcb7afc89512d435348f9cb209e10275875d77b643f3a3ab847f59ba3acb"
+      },
+      "policy_episode": 338947,
+      "applied_ns": 1794414666163951625,
+      "last_velocity_command": null
+    }
+  },
+  "note": "实验 08 的历史公式和源码哈希保持原样；当前代码快照另含之后添加的公式选择功能。"
+}

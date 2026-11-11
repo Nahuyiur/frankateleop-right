@@ -1,5 +1,6 @@
 import os
 import time
+from polymetis._mozi_timing import timed
 import torch
 import logging
 import threading
@@ -17,14 +18,117 @@ GRIPPER_FORCE = 20.0
 GRIPPER_DEBUG_INTERVAL = 0.5
 GRIPPER_COMMAND_THRESHOLD = 0.5
 EE_JOINT_LIMITS_LOWER = np.array(
-    [-2.64, -1.68, -2.80, -2.94, -2.70, 0.64, -2.91], dtype=float
+    [-2.90074, -1.83609, -2.90074, -3.07702, -2.87630, 0.43982, -3.05083], dtype=float
 )
 EE_JOINT_LIMITS_UPPER = np.array(
-    [2.64, 1.68, 2.80, -0.25, 2.70, 4.41, 2.91], dtype=float
+    [2.90074, 1.83609, 2.90074, -0.11694, 2.87630, 4.62163, 3.05083], dtype=float
 )
-# At the 50 Hz teleop command rate, the fastest FR3 wrist joint can move about
-# 0.10 rad between checks. Keep a larger default buffer than one command frame.
-DEFAULT_EE_JOINT_SOFT_MARGIN_RAD = 0.15
+# FR3 controller (FCI) position limits, the same values as joint_pos_upper/lower in
+# polymetis robot_client/*_franka_hardware.yaml. The HOLD fires DEFAULT margin rad
+# inside them; the polymetis spring starts outside this line (margin 0.05).
+# 2026-10-02: replaced the old table (libfranka recommended limits minus 0.1) per
+# user request. Note J4 now stops at -2.977; on 2026-10-01 the right arm hit
+# self-collision avoidance at J4 -3.00, so a fold that far may reflex before HOLD.
+DEFAULT_EE_JOINT_SOFT_MARGIN_RAD = 0.10
+# A restarted Cartesian policy starts at the measured pose. If the incoming
+# target is farther than this, it is the stale goal that caused the reflex
+# (Kx=750 N/m: a 40 N reflex needs ~5 cm); hold and require a fresh squeeze.
+RECOVERY_MAX_TARGET_OFFSET_M = 0.03
+RECOVERY_MAX_TARGET_OFFSET_RAD = 0.20
+# 2026-10-03 singularity-robust differential IK (FRANKA_IK_MODE=dik, default).
+# Polymetis' update_desired_ee_pose re-solves a plain CLIK (damping 1e-6, no
+# null-space term) from the *measured* joints every frame. Three failures seen
+# on 10-03 follow from that:
+#   * near singular poses the joint target moves ~1/sigma per unit EE motion:
+#     J6~pi makes J5/J7 counter-rotate ~3x the operator's wrist tremor (the
+#     "J7 shake"); the elbow/shoulder case runs J3 into overspeed (17:17);
+#   * seeding from the measured joints copies their null-space coordinate into
+#     the target, so the joint spring has no stiffness along the null space;
+#   * a far target can land on another IK branch (0.8-1.2 rad jumps, 18:11).
+# Instead, continue from the policy's own accepted joint goal and take one damped
+# least-squares step per command (resolved-rate), with damping that rises as the
+# weighted sigma_min falls; use the null space only to push away from joint
+# limits. One step, not an iterated solve: repeating DLS on the same target
+# converges back to the undamped solution (4 steps already pass ~60% of it), so
+# the damping must act as a per-frame rate along the weak direction. Well
+# conditioned directions converge within one 20 ms frame anyway.
+DIK_ITERATIONS = 1
+DIK_ROTATION_WEIGHT_M = 0.2          # 1 rad of orientation error weighs like 0.2 m
+DIK_SIGMA_DAMPING = 0.08             # normal poses sit at 0.10-0.13; home 0.10
+DIK_LAMBDA_MAX = 0.08
+# near_singular is reported only when it costs the operator something: sigma
+# is low *and* the damped step leaves the target visibly behind. sigma alone is
+# not enough: on 10-03 one operator worked for minutes at sigma ~0.05 (J6 ~3.4).
+DIK_SIGMA_NOTICE = 0.04
+DIK_SIGMA_NOTICE_CLEAR = 0.05
+DIK_NOTICE_LAG_M = 0.010
+DIK_NOTICE_LAG_RAD = np.deg2rad(3.0)
+DIK_NOTICE_CLEAR_LAG_M = 0.005
+DIK_NOTICE_CLEAR_LAG_RAD = np.deg2rad(1.5)
+DIK_STEP_MAX_RAD = 0.20              # per command, per joint
+# Per-command task-space step (50 Hz: 1 m/s, 5 rad/s). A sudden target jump
+# (stale clutch origin, tracking glitch: 9 cm / 50 deg on 10-03 18:52) is walked
+# over several frames instead of becoming a spring offset worth > 60 N at once.
+DIK_EE_STEP_M = 0.02
+DIK_EE_STEP_RAD = 0.10
+DIK_LIMIT_BUFFER_RAD = 0.30
+DIK_LIMIT_PUSH_RAD = 0.01            # per command, null-space only
+DIK_LIMIT_CLIP_RAD = 0.02
+DIK_UNREACHABLE_M = 0.10
+DIK_UNREACHABLE_RAD = 0.50
+DIK_UNREACHABLE_S = 0.5
+# A joint target farther than this from the measured joints means the arm is not
+# following (blocked); hold instead of winding up the spring. A goal from the same
+# live policy is never silently re-seeded from the measurement: that would turn a
+# blocked arm into a repeating push-release sawtooth.
+IK_JUMP_HOLD_RAD = 0.45
+
+
+def dik_solve(fk, jacobian, seed, target_position, target_rotation,
+              lower=EE_JOINT_LIMITS_LOWER, upper=EE_JOINT_LIMITS_UPPER):
+    """Damped least-squares steps from ``seed`` toward a world-frame EE target.
+
+    ``fk(q) -> (position[3], scipy Rotation)``, ``jacobian(q) -> 6x7`` in
+    LOCAL_WORLD_ALIGNED (Polymetis' convention). Returns (q, info).
+    """
+    weight = np.array([1, 1, 1] + [DIK_ROTATION_WEIGHT_M] * 3, dtype=float)
+    q = np.asarray(seed, dtype=float).copy()
+    sigma_min, weak = np.inf, None
+    for _ in range(DIK_ITERATIONS):
+        position, rotation = fk(q)
+        error = np.r_[target_position - position, (target_rotation * rotation.inv()).as_rotvec()]
+        if np.linalg.norm(error[:3]) < 1e-4 and np.linalg.norm(error[3:]) < 1e-3:
+            break
+        error[:3] *= min(1.0, DIK_EE_STEP_M / max(np.linalg.norm(error[:3]), 1e-12))
+        error[3:] *= min(1.0, DIK_EE_STEP_RAD / max(np.linalg.norm(error[3:]), 1e-12))
+        J = weight[:, None] * jacobian(q)
+        U, S, Vt = np.linalg.svd(J)
+        sigma_min, weak = float(S[-1]), Vt[5]
+        damping = 0.0
+        if sigma_min < DIK_SIGMA_DAMPING:
+            damping = DIK_LAMBDA_MAX ** 2 * (1.0 - (sigma_min / DIK_SIGMA_DAMPING) ** 2)
+        gains = S / (S ** 2 + damping)
+        step = Vt[:6].T @ (gains * (U.T @ (weight * error)))
+        # Null space of the damped map; push only joints inside the buffer.
+        projector = np.eye(7) - Vt[:6].T @ np.diag(S * gains) @ Vt[:6]
+        push = np.clip((lower + DIK_LIMIT_BUFFER_RAD - q) / DIK_LIMIT_BUFFER_RAD, 0, 1) \
+            - np.clip((q - (upper - DIK_LIMIT_BUFFER_RAD)) / DIK_LIMIT_BUFFER_RAD, 0, 1)
+        q = q + step + projector @ (DIK_LIMIT_PUSH_RAD * push)
+    q = np.clip(q, lower + DIK_LIMIT_CLIP_RAD, upper - DIK_LIMIT_CLIP_RAD)
+    position, rotation = fk(q)
+    residual_m = float(np.linalg.norm(target_position - position))
+    residual_rad = float((target_rotation * rotation.inv()).magnitude())
+    if weak is None:
+        J = weight[:, None] * jacobian(q)
+        _, S, Vt = np.linalg.svd(J)
+        sigma_min, weak = float(S[-1]), Vt[5]
+    wrist_share = float(weak[4] ** 2 + weak[6] ** 2)
+    return q, {
+        "sigma_min": sigma_min,
+        "kind": "wrist" if wrist_share >= 0.5 else "arm",
+        "residual_m": residual_m,
+        "residual_rad": residual_rad,
+    }
 
 
 class fr3Robot(Robot):
@@ -48,8 +152,10 @@ class fr3Robot(Robot):
             ip_address=robot_ip,
             port=franka_port,
         )
+        if self.robot.metadata.ee_link_name != 'panda_link8':
+            raise ValueError('Native flange observation requires the configured panda_link8 endpoint')
         self.gripper = GripperInterface(
-            ip_address=robot_ip,
+            ip_address=os.environ.get('FRANKA_GRIPPER_HOST', robot_ip),
             port=frankahand_port,
         )
         self._max_gripper_width = self._get_gripper_max_width()
@@ -65,24 +171,31 @@ class fr3Robot(Robot):
             self.robot.move_to_joint_positions(self.joint_positions_desired)
             
         self.control_mode = control_mode
+        from teleop.recording_telemetry import configured
+        self._recording_telemetry = configured('ik_command/' + os.environ.get('MOZI_ARM', 'unknown'))
         self._last_gripper_command = 0.0
         self._last_gripper_command_raw = 0.0
         self._last_gripper_target_width = self._max_gripper_width
         self._last_gripper_command_timestamp = time.time()
         self._last_gripper_command_source = "init"
+        self._gripper_command_snapshot = self._gripper_command_fields()
         self._ee_joint_soft_margin = float(
             os.environ.get(
                 "FRANKA_EE_JOINT_SOFT_MARGIN_RAD",
                 str(DEFAULT_EE_JOINT_SOFT_MARGIN_RAD),
             )
         )
-        if not 0.0 < self._ee_joint_soft_margin < 0.5:
+        if not 0.0 <= self._ee_joint_soft_margin < 0.5:
             raise ValueError(
-                "FRANKA_EE_JOINT_SOFT_MARGIN_RAD must be in (0, 0.5), got "
+                "FRANKA_EE_JOINT_SOFT_MARGIN_RAD must be in [0, 0.5), got "
                 f"{self._ee_joint_soft_margin}"
             )
         self._last_ee_hold_log_time = 0.0
         self._last_ee_hold_reason = ""
+        self._ik_mode = os.environ.get("FRANKA_IK_MODE", "dik").strip().lower()
+        if self._ik_mode not in ("dik", "polymetis"):
+            raise ValueError(f"FRANKA_IK_MODE must be dik or polymetis, got {self._ik_mode}")
+        self._reset_ik_guard()
         # PICO starts in preview mode and may not issue an EEF command for
         # several seconds. Starting Polymetis' Cartesian policy here would
         # leave libfranka without a desired-pose update and trigger its 1 s
@@ -130,11 +243,34 @@ class fr3Robot(Robot):
             except Exception as exc:
                 print(f"Could not initialize cached gripper command from feedback: {exc}")
 
+        # Dedicated feedback workers: neither device RPC shares the command
+        # server thread. Preserve native production timestamps in one-slot caches.
+        from polymetis_pb2 import Empty
+        from teleop.native_observation import LatestObservation, arm_observation, gripper_observation
+        self._fast_observation_requested_until = 0.
+        self._native_arm = LatestObservation(
+            lambda: self.robot.grpc_connection.GetRobotState(Empty(), timeout=.1),
+            arm_observation, hz=50, name="fr3-native-state")
+        self._native_gripper = LatestObservation(
+            lambda: self.gripper.grpc_connection.GetState(Empty(), timeout=.1),
+            lambda state: gripper_observation(state, self._max_gripper_width),
+            hz=30, name="fr3-encoder-state")
+        self._native_anchor = LatestObservation(self._read_control_anchor, lambda value: value,
+                                                hz=30, name="fr3-control-anchor")
+
     def _start_control_mode(self, control_mode: str) -> None:
+        # A joint policy or a failed restart must not look like a live EE policy.
+        self._cartesian_policy_started = False
+        self._tracking_impedance_applied = None
+        self._reset_ik_guard()
         if control_mode == "joint":
             self.robot.start_joint_impedance()
         elif control_mode == "ee":
-            self.robot.start_cartesian_impedance()
+            if getattr(self, '_tracking_impedance_override', None) is not None:
+                from teleop.tracking_impedance import start
+                start(self)
+            else:
+                self.robot.start_cartesian_impedance()
             self._cartesian_policy_started = True
         else:
             raise ValueError(f"Unsupported fr3 control_mode: {control_mode}")
@@ -216,7 +352,7 @@ class fr3Robot(Robot):
         return True
 
     def _joint_soft_limit_hold(self, target_pose=None):
-        """Return a structured HOLD result when an arm joint nears a hard limit."""
+        """Return HOLD at the configured FR3 position boundary; allow retreat."""
         joints_tensor = self.robot.get_joint_positions()
         if hasattr(joints_tensor, "detach"):
             joints = joints_tensor.detach().cpu().numpy().astype(float)
@@ -271,10 +407,33 @@ class fr3Robot(Robot):
             return
         self._last_ee_hold_log_time = now
         self._last_ee_hold_reason = reason
-        print(f"Cartesian safety HOLD: {result}")
+        if reason == "joint_soft_limit":
+            LOGGER.warning(
+                "Cartesian safety HOLD: reason=%s joint_index=%s joint_position=%.6f limit_side=%s limit=%.6f margin_rad=%.3f",
+                reason,
+                result.get("joint_index"),
+                float(result.get("joint_position", float("nan"))),
+                result.get("limit_side"),
+                float(result.get("limit", float("nan"))),
+                float(result.get("margin_rad", float("nan"))),
+            )
+        elif result.get("status") == "notice":
+            LOGGER.warning("Cartesian IK notice: %s", result)
+        else:
+            LOGGER.warning("Cartesian safety HOLD: %s", result)
 
     def _hold_current_ee_pose(self) -> None:
         """Replace a potentially unsafe target with the measured current pose."""
+        if getattr(self, "_ik_mode", "polymetis") == "dik":
+            # Latch the measured joints directly: an IK of the current pose can
+            # itself jump near singular/J5~0 poses.
+            self._reset_ik_guard()
+            if getattr(self,'_tracking_impedance_applied',None) is not None:
+                from teleop.tracking_impedance import update_target
+                update_target(self,self.robot.get_joint_positions(),hold=True)
+            else:
+                self.robot.update_desired_joint_positions(self.robot.get_joint_positions())
+            return
         position, orientation = self.robot.get_ee_pose()
         update_idx = self.robot.update_desired_ee_pose(
             position=position, orientation=orientation
@@ -282,6 +441,148 @@ class fr3Robot(Robot):
         if update_idx == -1:
             raise RuntimeError("Franka IK failed while latching the current EE pose")
 
+    def _reset_ik_guard(self) -> None:
+        self._dik_far_since = None
+        self._dik_near_singular = False
+
+    def _dik_seed(self, measured):
+        """The live policy's accepted joint goal, or the measured joints."""
+        goal = getattr(self.robot, "_teleop_accepted_joint_goal", None)
+        episode = getattr(self.robot, "_teleop_goal_episode", None)
+        tracking = getattr(self, '_tracking_impedance_applied', None)
+        if goal is None or episode is None:
+            if tracking is not None:
+                raise RuntimeError('Tracking policy lost its accepted joint goal')
+            return measured
+        goal = np.asarray(goal, dtype=float).reshape(-1)
+        if goal.shape != (7,) or not np.all(np.isfinite(goal)):
+            return measured
+        try:
+            from polymetis_pb2 import Empty
+            interval = self.robot.grpc_connection.GetEpisodeInterval(Empty(), timeout=0.25)
+        except Exception:
+            if tracking is not None:
+                raise
+            return measured
+        if tracking is not None and (interval.start != tracking['policy_episode'] or interval.end != -1):
+            raise RuntimeError('Tracking policy changed; stop this experiment instead of mixing gains')
+        if interval.start != episode or interval.end != -1:
+            return measured  # Recovery, homing or replay replaced the policy.
+        return goal
+
+    def _update_ee_target(self, position, orientation):
+        """Return (update_idx, result) for one Cartesian target.
+
+        update_idx == -1 keeps the original "IK failed" semantics. ``result`` is
+        a HOLD (target not sent) or a near-singular notice (target sent).
+        """
+        if getattr(self, "_ik_mode", "polymetis") != "dik":
+            submitted_ns = time.time_ns()
+            update_idx = self.robot.update_desired_ee_pose(
+                position=position, orientation=orientation
+            )
+            goal = getattr(self.robot, "_teleop_accepted_joint_goal", None)
+            if update_idx != -1 and goal is not None:
+                self._record_ik_target(goal, position, orientation, 'polymetis', submitted_ns)
+            return update_idx, None
+        from scipy.spatial.transform import Rotation
+
+        model = self.robot.robot_model
+
+        def fk(q):
+            p, quat = model.forward_kinematics(torch.tensor(q, dtype=torch.float32))
+            return (p.detach().cpu().numpy().astype(float),
+                    Rotation.from_quat(quat.detach().cpu().numpy().astype(float)))
+
+        def jacobian(q):
+            return model.compute_jacobian(torch.tensor(q, dtype=torch.float32)).detach().cpu().numpy().astype(float)
+
+        measured = self.robot.get_joint_positions().detach().cpu().numpy().astype(float).reshape(-1)
+        if measured.shape != (7,) or not np.all(np.isfinite(measured)):
+            raise RuntimeError(f"Invalid Franka joint feedback: {measured}")
+        seed = self._dik_seed(measured)
+        target_position = np.asarray(position, dtype=float).reshape(3)
+        target_rotation = Rotation.from_quat(np.asarray(orientation, dtype=float).reshape(4))
+        q, info = dik_solve(fk, jacobian, seed, target_position, target_rotation)
+        q = seed + np.clip(q - seed, -DIK_STEP_MAX_RAD, DIK_STEP_MAX_RAD)
+        if not np.all(np.isfinite(q)):
+            return -1, None
+        offset = q - measured
+        worst = int(np.argmax(np.abs(offset)))
+        if abs(offset[worst]) > IK_JUMP_HOLD_RAD:
+            self._hold_current_ee_pose()
+            return None, {
+                "status": "hold",
+                "reason": "ik_joint_jump",
+                "joint_index": worst,
+                "delta_rad": round(float(offset[worst]), 3),
+                "limit_rad": IK_JUMP_HOLD_RAD,
+            }
+        now = time.monotonic()
+        if info["residual_m"] > DIK_UNREACHABLE_M or info["residual_rad"] > DIK_UNREACHABLE_RAD:
+            if self._dik_far_since is None:
+                self._dik_far_since = now
+            elif now - self._dik_far_since >= DIK_UNREACHABLE_S:
+                self._hold_current_ee_pose()
+                return -1, None
+        else:
+            self._dik_far_since = None
+        joint_target = torch.tensor(q, dtype=torch.float32)
+        submitted_ns = time.time_ns()
+        if getattr(self,'_tracking_impedance_applied',None) is not None:
+            from teleop.tracking_impedance import update_target
+            update_idx = update_target(self,joint_target,position,orientation)
+        else:
+            update_idx = self.robot.update_desired_joint_positions(joint_target)
+        if update_idx != -1:
+            self._record_ik_target(joint_target, position, orientation, 'dik', submitted_ns)
+        sigma = info["sigma_min"]
+        if self._dik_near_singular:
+            self._dik_near_singular = sigma < DIK_SIGMA_NOTICE_CLEAR and (
+                info["residual_m"] > DIK_NOTICE_CLEAR_LAG_M
+                or info["residual_rad"] > DIK_NOTICE_CLEAR_LAG_RAD)
+        else:
+            self._dik_near_singular = sigma < DIK_SIGMA_NOTICE and (
+                info["residual_m"] > DIK_NOTICE_LAG_M
+                or info["residual_rad"] > DIK_NOTICE_LAG_RAD)
+        if not self._dik_near_singular:
+            return update_idx, None
+        return update_idx, {
+            "status": "notice",
+            "reason": "near_singular",
+            "kind": info["kind"],
+            "sigma_min": round(sigma, 4),
+        }
+
+    def _record_ik_target(self, joints, position, quaternion, mode, submitted_ns):
+        publisher = getattr(self, '_recording_telemetry', None)
+        if publisher is not None:
+            from teleop.recording_telemetry import emit_ik
+            emit_ik(publisher, joints, position, quaternion, mode, submitted_ns, time.time_ns(),
+                    tracking_velocity=getattr(self,'_tracking_velocity_sample',None))
+
+    def _restart_cartesian_at_measured_pose(self, target_pose=None):
+        """Restart the policy at the measured pose; refuse a target far from it."""
+        if getattr(self, '_tracking_impedance_override', None) is not None:
+            raise RuntimeError('Tracking policy interrupted; restart as a new experiment')
+        self.robot.start_cartesian_impedance()
+        self._cartesian_policy_started = True
+        self._reset_ik_guard()
+        if target_pose is None:
+            return None
+        from scipy.spatial.transform import Rotation
+        position, orientation = self.robot.get_ee_pose()
+        offset_m = float(np.linalg.norm(np.asarray(target_pose[:3], dtype=float) - position.numpy()))
+        offset_rad = float((Rotation.from_euler("xyz", target_pose[3:])
+                            * Rotation.from_quat(orientation.numpy()).inv()).magnitude())
+        if offset_m <= RECOVERY_MAX_TARGET_OFFSET_M and offset_rad <= RECOVERY_MAX_TARGET_OFFSET_RAD:
+            return None
+        result = {"status": "hold", "reason": "recovered_target_far",
+                  "offset_m": round(offset_m, 4), "offset_rad": round(offset_rad, 3)}
+        LOGGER.warning("Cartesian policy restarted at measured pose; stale target refused: %s", result)
+        return result
+
+    @timed("cartesian_guard")
     def _guard_cartesian_controller(self, target_pose=None):
         """Hold at soft limits and safely recover a stopped Cartesian policy."""
         soft_limit = self._joint_soft_limit_hold(target_pose)
@@ -299,9 +600,7 @@ class fr3Robot(Robot):
         # recovery. Restart only from a joint-safe state. Do not wait up to two
         # seconds for is_running_policy(): the 1 kHz Franka watchdog can expire
         # during that poll and the ZMQ caller then reports a false timeout.
-        self.robot.start_cartesian_impedance()
-        self._cartesian_policy_started = True
-        return None
+        return self._restart_cartesian_at_measured_pose(target_pose)
 
     def num_dofs(self) -> int:
         """Get the number of joints of the robot.
@@ -405,7 +704,9 @@ class fr3Robot(Robot):
             raise ValueError(f"Invalid joint positions: {joints}")
 
         desired_joints = torch.tensor(joints, dtype=torch.float32)
-        self.robot.move_to_joint_positions(desired_joints)
+        # Wait for the trajectory, but do not download and discard its entire
+        # 1 kHz state log before restarting the holding controller.
+        self.robot.move_to_joint_positions(desired_joints, blocking=True, return_log=False)
 
         if gripper_width is not None:
             width = float(np.clip(gripper_width, 0.0, self._max_gripper_width))
@@ -424,6 +725,66 @@ class fr3Robot(Robot):
         if restart_controller:
             self._start_control_mode(self.control_mode)
 
+    def set_replay_mode(self, mode: str) -> None:
+        """Start a measured-pose replay policy, including after lazy startup."""
+        if mode not in ("ee", "joint"):
+            raise ValueError("unsupported replay control mode")
+        self._cartesian_policy_started = False
+        running = bool(self.robot.is_running_policy())
+        if running:
+            try:
+                self.robot.terminate_current_policy(return_log=False)
+            except Exception as exc:
+                # Only the policy-ending race is benign. Preserve all transport,
+                # robot and controller failures instead of reporting success.
+                details = exc.details() if callable(getattr(exc, "details", None)) else str(exc)
+                if details != "Tried to terminate controller with no controller running.":
+                    raise
+        self._start_control_mode(mode)
+        self.control_mode = mode
+
+    def ensure_cartesian_teleop(self) -> None:
+        """PICO recovery v2: restore measured-pose hold without terminating an absent policy."""
+        try:
+            running = bool(self.robot.is_running_policy())
+        except Exception:
+            self._cartesian_policy_started = False
+            raise
+        if self.control_mode == "ee" and self._cartesian_policy_started and running:
+            return
+        self._cartesian_policy_started = False
+        if running:
+            try:
+                self.robot.terminate_current_policy(return_log=False)
+            except Exception as exc:
+                # The policy can end between the state query and termination.
+                # Only this exact benign race is recoverable here; communication
+                # errors and other termination failures remain visible.
+                details = exc.details() if callable(getattr(exc, "details", None)) else str(exc)
+                if details != "Tried to terminate controller with no controller running.":
+                    raise
+        self._start_control_mode("ee")
+        self.control_mode = "ee"
+
+    def command_replay_joints(self, joint_positions, gripper_width=None) -> None:
+        if self.control_mode != "joint":
+            raise RuntimeError("joint replay controller is not active")
+        joints = np.asarray(joint_positions, dtype=float).reshape(-1)
+        if joints.shape != (7,) or not np.all(np.isfinite(joints)):
+            raise ValueError("joint replay requires 7 finite values")
+        if np.any(joints < EE_JOINT_LIMITS_LOWER) or np.any(joints > EE_JOINT_LIMITS_UPPER):
+            raise ValueError("joint replay target exceeds joint limits")
+        if gripper_width is not None:
+            width = float(gripper_width)
+            if not np.isfinite(width) or not 0.0 <= width <= self._max_gripper_width:
+                raise ValueError("invalid replay gripper width")
+        # Do not silently restart/retry a failed replay trajectory.
+        self.robot.update_desired_joint_positions(torch.tensor(joints, dtype=torch.float32))
+        if gripper_width is not None:
+            self._queue_gripper_command(width, GRIPPER_SPEED, GRIPPER_FORCE)
+            self._remember_gripper_command(1.0 - width / self._max_gripper_width, width, "joint_replay")
+
+    @timed("command_ee_pose")
     def command_ee_pose(
             self,
             pose_6d: np.ndarray,
@@ -459,22 +820,20 @@ class fr3Robot(Robot):
         quat = Rotation.from_euler("xyz", pose[3:], degrees=False).as_quat()
         orientation = torch.tensor(quat, dtype=torch.float32)
         try:
-            update_idx = self.robot.update_desired_ee_pose(
-                position=position, orientation=orientation
-            )
+            update_idx, guard_hold = self._update_ee_target(position, orientation)
         except Exception as exc:
             if "no controller running" not in str(exc).lower():
                 raise
             # is_running_policy() can report a stale/optimistic state after
             # Polymetis has stopped the policy. Force a restart and retry the
             # exact same target once; the old code restarted/checks but then
-            # re-raised without ever retrying the pose update.
-            self.robot.start_cartesian_impedance()
-            self._cartesian_policy_started = True
+            # re-raised without ever retrying the pose update. A target far
+            # from the restart pose is the stale goal and is not retried.
+            stale = self._restart_cartesian_at_measured_pose(pose)
+            if stale is not None:
+                return stale
             try:
-                update_idx = self.robot.update_desired_ee_pose(
-                    position=position, orientation=orientation
-                )
+                update_idx, guard_hold = self._update_ee_target(position, orientation)
             except Exception as retry_exc:
                 if "no controller running" not in str(retry_exc).lower():
                     raise
@@ -483,6 +842,18 @@ class fr3Robot(Robot):
                     "reason": "cartesian_controller_restarted",
                     "detail": str(retry_exc),
                 }
+        notice = None
+        if guard_hold is not None and guard_hold.get("status") == "notice":
+            notice, guard_hold = guard_hold, None
+            self._log_ee_hold(notice)
+        if guard_hold is not None:
+            self._log_ee_hold(guard_hold)
+            if update_gripper:
+                width = float(np.clip(gripper_width, 0.0, self._max_gripper_width))
+                closedness = 1.0 - width / self._max_gripper_width
+                self._remember_gripper_command(closedness, width, "command_ee_pose_hold")
+                self._queue_gripper_command(width, gripper_speed, gripper_force)
+            return guard_hold
         if update_idx == -1:
             raise RuntimeError(f"Franka IK failed for pose_6d={pose.tolist()}")
 
@@ -495,7 +866,31 @@ class fr3Robot(Robot):
                 "command_ee_pose",
             )
             self._queue_gripper_command(width, gripper_speed, gripper_force)
+        return notice
 
+    def command_gripper(self, gripper_width=None, closedness=None,
+                        gripper_speed=GRIPPER_SPEED, gripper_force=40.0):
+        """Queue an independent gripper target, without an arm pose/IK update."""
+        if (gripper_width is None) == (closedness is None):
+            raise ValueError("provide exactly one of gripper_width or closedness")
+        if closedness is not None:
+            value = float(closedness)
+            if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError("closedness must be finite and within [0,1]")
+            width = (1.0 - value) * self._max_gripper_width
+        else:
+            width = float(gripper_width)
+            if not np.isfinite(width) or not 0.0 <= width <= self._max_gripper_width:
+                raise ValueError("gripper width is outside the hardware range")
+            value = 1.0 - width / self._max_gripper_width
+        speed, force = float(gripper_speed), float(gripper_force)
+        if not np.isfinite(speed) or speed <= 0 or not np.isfinite(force) or not 0 < force <= 80:
+            raise ValueError("invalid gripper speed or force")
+        self._remember_gripper_command(value, width, "command_gripper")
+        self._queue_gripper_command(width, speed, force)
+        return {"accepted": True}
+
+    @timed("gripper_enqueue")
     def _queue_gripper_command(
         self, width: float, speed: float, force: float
     ) -> None:
@@ -596,61 +991,96 @@ class fr3Robot(Robot):
             max_width = MAX_OPEN
         return max_width
 
-    def get_observations(self, fast: bool = False) -> Dict[str, np.ndarray]:
-        if fast:
-            # Teleop anchoring/tracking only needs EEF pose and gripper width.
-            # Avoid five synchronous gRPC calls on the command server; the
-            # full recorder observation contract remains the default below.
-            ee_pos, ee_quat = self.robot.get_ee_pose()
-            ee_pos = ee_pos.detach().cpu().numpy()
-            ee_quat = ee_quat.detach().cpu().numpy()
+    def _cartesian_hold_anchor(self):
+        """Return a cached accepted goal only for the same confirmed live EE policy.
+
+        This runs on the native feedback worker, never the command/VR receiver.
+        No policy is started and no target is sent by an observation.
+        """
+        goal = getattr(self.robot, "_teleop_accepted_joint_goal", None)
+        episode = getattr(self.robot, "_teleop_goal_episode", None)
+        if self.control_mode != "ee" or goal is None or episode is None:
+            return {}
+        try:
+            from polymetis_pb2 import Empty
             from scipy.spatial.transform import Rotation
-            ee_euler = Rotation.from_quat(ee_quat).as_euler("xyz", degrees=False)
-            return {
-                "ee_pos_quat": np.concatenate([ee_pos, ee_quat]),
-                "ee_pose_euler": np.concatenate([ee_pos, ee_euler]),
-                "gripper_width": np.array(
-                    [self._last_gripper_target_width], dtype=np.float32
-                ),
-            }
-        joints = self.get_joint_state()
-        joint_velocities = (
-            self.robot.get_joint_velocities()
-            .detach()
-            .cpu()
-            .numpy()
-            .astype(np.float32)
-        )
-        ee_pos, ee_quat = self.robot.get_ee_pose()
-        ee_pos = ee_pos.detach().cpu().numpy()
-        ee_quat = ee_quat.detach().cpu().numpy()
-        pos_quat = np.concatenate([ee_pos, ee_quat])
+            interval = self.robot.grpc_connection.GetEpisodeInterval(Empty(), timeout=0.25)
+            if interval.start != episode or interval.end != -1:
+                return {}  # Recovery, homing or replay invalidates the old goal.
+            joints = np.asarray(goal, dtype=np.float32).reshape(-1)
+            if joints.shape != (7,) or not np.all(np.isfinite(joints)):
+                return {}
+            position, quaternion = self.robot.robot_model.forward_kinematics(torch.tensor(joints))
+            pose = np.concatenate([position.detach().cpu().numpy(),
+                                   Rotation.from_quat(quaternion.detach().cpu().numpy()).as_euler("xyz")])
+            if not np.all(np.isfinite(pose)):
+                return {}
+            return {"ee_hold_pose_euler": tuple(pose), "ee_hold_policy_episode": int(episode),
+                    "ee_hold_joint_goal": tuple(joints)}
+        except Exception:
+            # An unverified cached goal is never reused. Preserve the existing
+            # measured observation contract and let normal guards handle control.
+            return {}
 
-        from scipy.spatial.transform import Rotation
+    def _read_control_anchor(self):
+        # Conservative RPC-start bound; slow policy queries cannot make cached
+        # anchors appear fresh or stall native arm/gripper feedback reception.
+        result = dict(state_timestamp_ns=time.time_ns())
+        if time.monotonic() < self._fast_observation_requested_until:
+            # This FK applies only to an accepted COMMAND anchor, never feedback.
+            result.update(self._cartesian_hold_anchor())
+        return result
 
-        ee_euler = Rotation.from_quat(ee_quat).as_euler("xyz", degrees=False)
-        pos_euler = np.concatenate([ee_pos, ee_euler])
-        gripper_pos = np.array([joints[-1]])
-        gripper_width = float(joints[-1] * self._max_gripper_width)
-        return {
-            # Preserve the existing 8-D compatibility contract: 7 arm joints
-            # followed by normalized gripper width.  Callers that only need the
-            # arm explicitly slice the first seven values.
-            "joint_positions": joints,
-            "joint_velocities": joint_velocities,
-            "ee_pos_quat": pos_quat,
-            "ee_pose_euler": pos_euler,
-            "gripper_position": gripper_pos,
-            "gripper_width": np.array([gripper_width], dtype=np.float32),
-            "gripper_closedness": np.array([self._last_gripper_command_raw], dtype=np.float32),
-            "gripper_01closedness": np.array([self._last_gripper_command], dtype=np.float32),
-            "gripper_closed": np.array([self._last_gripper_command], dtype=np.float32),
-            "gripper_command": np.array([self._last_gripper_command], dtype=np.float32),
-            "gripper_command_raw": np.array([self._last_gripper_command_raw], dtype=np.float32),
-            "gripper_target_width": np.array([self._last_gripper_target_width], dtype=np.float32),
-            "gripper_command_timestamp": np.array([self._last_gripper_command_timestamp], dtype=np.float64),
-            "gripper_command_source": self._last_gripper_command_source,
-        }
+    def get_feedback_observations(self, recording: bool = False):
+        """Read native caches without sharing a lock/RPC with motion execution."""
+        result = self._native_arm.snapshot()
+        try:
+            measured = self._native_gripper.snapshot()
+            measured.pop("state_timestamp_ns")  # Never replace the arm sample time.
+            result.update(measured)
+        except RuntimeError as exc:
+            result.update(gripper_width=(float("nan"),), gripper_width_source="unavailable",
+                          gripper_timestamp_ns=0, gripper_error_code=-1,
+                          gripper_observation_error=str(exc), gripper_max_width=self._max_gripper_width)
+        # One atomic publication keeps command metadata internally consistent
+        # when the independent feedback server reads during a gripper command.
+        result.update(self._gripper_command_snapshot)
+        if not recording:
+            width = float(result['gripper_width'][0])
+            result['joint_positions'] = np.append(result['joint_positions'], width / self._max_gripper_width)
+            result['gripper_position'] = np.array([width / self._max_gripper_width])
+        return result
+
+    @timed("observations")
+    def get_observations(self, fast: bool = False, recording: bool = False) -> Dict[str, np.ndarray]:
+        # Optional command anchors retain their legacy semantics on the command
+        # endpoint. Independent feedback never requests or substitutes an anchor.
+        result = self.get_feedback_observations(recording=fast or recording)
+        if fast:
+            self._fast_observation_requested_until = time.monotonic() + .5
+            try:
+                anchor = self._native_anchor.snapshot()
+                anchor.pop('state_timestamp_ns')
+                result.update(anchor)
+            except RuntimeError:
+                pass  # An unverified command anchor is never reused.
+        goal = result.pop('ee_hold_joint_goal', None)
+        if (not fast or self.control_mode != 'ee' or goal is None
+                or result.get('ee_hold_policy_episode') != getattr(self.robot, '_teleop_goal_episode', None)
+                or not np.array_equal(goal, getattr(self.robot, '_teleop_accepted_joint_goal', None))):
+            result.pop('ee_hold_pose_euler', None)
+            result.pop('ee_hold_policy_episode', None)
+        return result
+
+    def _gripper_command_fields(self):
+        return dict(gripper_closedness=(self._last_gripper_command_raw,),
+            gripper_01closedness=(self._last_gripper_command,),
+            gripper_closed=(self._last_gripper_command,),
+            gripper_command=(self._last_gripper_command,),
+            gripper_command_raw=(self._last_gripper_command_raw,),
+            gripper_target_width=(self._last_gripper_target_width,),
+            gripper_command_timestamp=(self._last_gripper_command_timestamp,),
+            gripper_command_source=self._last_gripper_command_source)
 
     def _remember_gripper_command(
             self,
@@ -665,6 +1095,7 @@ class fr3Robot(Robot):
         self._last_gripper_target_width = float(np.clip(target_width, 0.0, max_width))
         self._last_gripper_command_timestamp = time.time()
         self._last_gripper_command_source = source
+        self._gripper_command_snapshot = self._gripper_command_fields()
 
 
 def main():

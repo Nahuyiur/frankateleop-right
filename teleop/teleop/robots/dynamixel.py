@@ -6,7 +6,7 @@ from teleop.robots.robot import Robot
 
 
 class DynamixelRobot(Robot):
-    """A class representing a UR robot."""
+    """A Dynamixel-based GELLO leader with optional joint damping."""
 
     def __init__(
         self,
@@ -18,6 +18,11 @@ class DynamixelRobot(Robot):
         baudrate: int = 57600,
         gripper_config: Optional[Tuple[int, float, float]] = None,
         start_joints: Optional[np.ndarray] = None,
+        dynamixel_torque_enable: Optional[Sequence[int]] = None,
+        dynamixel_kp_p: Optional[Sequence[int]] = None,
+        dynamixel_kp_i: Optional[Sequence[int]] = None,
+        dynamixel_kp_d: Optional[Sequence[int]] = None,
+        dynamixel_goal_position: Optional[Sequence[float]] = None,
     ):
         from teleop.dynamixel.driver import (
             DynamixelDriver,
@@ -26,6 +31,7 @@ class DynamixelRobot(Robot):
         )
 
         print(f"attempting to connect to port: {port}")
+        self._num_arm_joints = len(joint_ids)
         self.gripper_open_close: Optional[Tuple[float, float]]
         if gripper_config is not None:
             assert joint_offsets is not None
@@ -71,10 +77,24 @@ class DynamixelRobot(Robot):
 
         if real:
             self._driver = DynamixelDriver(joint_ids, port=port, baudrate=baudrate)
-            self._driver.set_torque_mode(False)
+            if dynamixel_torque_enable is not None:
+                self._configure_damping(
+                    torque_enable=dynamixel_torque_enable,
+                    kp_p=dynamixel_kp_p,
+                    kp_i=dynamixel_kp_i,
+                    kp_d=dynamixel_kp_d,
+                    goal_position_rad=dynamixel_goal_position,
+                )
+                self._torque_on = any(
+                    enabled == 1 for enabled in dynamixel_torque_enable
+                )
+            else:
+                self._driver.set_torque_mode(False)
+                self._torque_on = False
         else:
             self._driver = FakeDynamixelDriver(joint_ids)
-        self._torque_on = False
+            self._torque_on = False
+        self._closed = False
         self._last_pos = None
         self._alpha = 0.99
 
@@ -99,6 +119,54 @@ class DynamixelRobot(Robot):
             if gripper_config is not None:
                 new_joint_offsets.append(self._joint_offsets[-1])
             self._joint_offsets = np.array(new_joint_offsets)
+
+    def _configure_damping(
+        self,
+        torque_enable: Sequence[int],
+        kp_p: Optional[Sequence[int]] = None,
+        kp_i: Optional[Sequence[int]] = None,
+        kp_d: Optional[Sequence[int]] = None,
+        goal_position_rad: Optional[Sequence[float]] = None,
+    ):
+        """Map arm damping targets to the raw motor frame.
+
+        Damping inputs describe arm joints only. If the GELLO trigger gripper is
+        present, its register fields are padded with zero and its torque remains
+        disabled.
+        """
+        total_count = len(self._joint_ids)
+        arm_count = self._num_arm_joints
+
+        def _pad_arm_values(name, values):
+            if values is None:
+                return None
+            if len(values) != arm_count:
+                raise ValueError(f"{name} must contain one value per arm joint")
+            return list(values) + [0] * (total_count - arm_count)
+
+        padded_torque = _pad_arm_values("torque_enable", torque_enable)
+        if any(value not in (0, 1) for value in torque_enable):
+            raise ValueError("torque_enable values must be 0 or 1")
+
+        raw_goal_rad = None
+        if goal_position_rad is not None:
+            if len(goal_position_rad) != arm_count:
+                raise ValueError(
+                    "goal_position_rad must contain one value per arm joint"
+                )
+            raw_goal_rad = (
+                np.asarray(goal_position_rad) * self._joint_signs[:arm_count]
+                + self._joint_offsets[:arm_count]
+            ).tolist()
+            raw_goal_rad += [0.0] * (total_count - arm_count)
+
+        self._driver.configure_damping(
+            torque_enable=padded_torque,
+            kp_p=_pad_arm_values("kp_p", kp_p),
+            kp_i=_pad_arm_values("kp_i", kp_i),
+            kp_d=_pad_arm_values("kp_d", kp_d),
+            goal_position_rad=raw_goal_rad,
+        )
 
     def num_dofs(self) -> int:
         return len(self._joint_ids)
@@ -126,6 +194,25 @@ class DynamixelRobot(Robot):
 
     def command_joint_state(self, joint_state: np.ndarray) -> None:
         self._driver.set_joints((joint_state + self._joint_offsets).tolist())
+
+    def close(self):
+        """Disable all leader torque before closing the serial driver."""
+        if getattr(self, "_closed", False):
+            return
+        driver = getattr(self, "_driver", None)
+        if driver is None:
+            return
+        try:
+            driver.close()
+        finally:
+            self._torque_on = False
+            self._closed = True
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def set_torque_mode(self, mode: bool):
         if mode == self._torque_on:

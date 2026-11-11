@@ -27,3 +27,15 @@ outputs/*
 # vim
 *.swp
 MUJOCO_LOG.TXT
+# Local runtime artifacts and prior source backups
+/work/
+/backups/
+/dual_pi05/runtime/
+/umi_genrobot/.conda/
+/umi_genrobot/adb_home/
+/umi_genrobot/vendor/
+*.bak-*
+*.before*
+*.ik-guard-*
+._*
+nohup.out

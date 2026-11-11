@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 import logging
+import os
 import tempfile
 import subprocess
 import sys
@@ -16,6 +17,20 @@ from polymetis.robot_client.abstract_robot_client import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _sudo_environment_args():
+    """Pass runtime library paths explicitly after sudo sanitizes the environment."""
+    path = os.pathsep.join(
+        item
+        for item in os.environ.get("PATH", "").split(os.pathsep)
+        if item and not item.startswith("/tmp/franka-sudo-wrapper.")
+    )
+    args = [f"PATH={path}"]
+    library_path = os.environ.get("LD_LIBRARY_PATH")
+    if library_path:
+        args.append(f"LD_LIBRARY_PATH={library_path}")
+    return args
 
 
 class ExecutableRobotClient(AbstractRobotClient):
@@ -71,7 +86,9 @@ class ExecutableRobotClient(AbstractRobotClient):
                 # Add sudo if realtime; also, inherit $PATH variable
                 command_list = [path_to_exec, cfg_file.name]
                 if self.use_real_time:
-                    command_list = ["sudo", "env", '"PATH=$PATH"'] + command_list
+                    command_list = (
+                        ["sudo", "env"] + _sudo_environment_args() + command_list
+                    )
 
                 # Run
                 log.info(f"=== Executing client at {path_to_exec} ===")

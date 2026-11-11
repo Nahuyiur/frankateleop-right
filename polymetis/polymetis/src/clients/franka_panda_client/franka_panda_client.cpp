@@ -22,6 +22,70 @@
 using grpc::ClientContext;
 using grpc::Status;
 
+namespace {
+uint64_t mozi_error_mask(const franka::Errors& error) noexcept {
+  uint64_t mask=0;
+  if(error.joint_position_limits_violation) mask |= (1ULL << 0);
+  if(error.cartesian_position_limits_violation) mask |= (1ULL << 1);
+  if(error.self_collision_avoidance_violation) mask |= (1ULL << 2);
+  if(error.joint_velocity_violation) mask |= (1ULL << 3);
+  if(error.cartesian_velocity_violation) mask |= (1ULL << 4);
+  if(error.force_control_safety_violation) mask |= (1ULL << 5);
+  if(error.joint_reflex) mask |= (1ULL << 6);
+  if(error.cartesian_reflex) mask |= (1ULL << 7);
+  if(error.max_goal_pose_deviation_violation) mask |= (1ULL << 8);
+  if(error.max_path_pose_deviation_violation) mask |= (1ULL << 9);
+  if(error.cartesian_velocity_profile_safety_violation) mask |= (1ULL << 10);
+  if(error.joint_position_motion_generator_start_pose_invalid) mask |= (1ULL << 11);
+  if(error.joint_motion_generator_position_limits_violation) mask |= (1ULL << 12);
+  if(error.joint_motion_generator_velocity_limits_violation) mask |= (1ULL << 13);
+  if(error.joint_motion_generator_velocity_discontinuity) mask |= (1ULL << 14);
+  if(error.joint_motion_generator_acceleration_discontinuity) mask |= (1ULL << 15);
+  if(error.cartesian_position_motion_generator_start_pose_invalid) mask |= (1ULL << 16);
+  if(error.cartesian_motion_generator_elbow_limit_violation) mask |= (1ULL << 17);
+  if(error.cartesian_motion_generator_velocity_limits_violation) mask |= (1ULL << 18);
+  if(error.cartesian_motion_generator_velocity_discontinuity) mask |= (1ULL << 19);
+  if(error.cartesian_motion_generator_acceleration_discontinuity) mask |= (1ULL << 20);
+  if(error.cartesian_motion_generator_elbow_sign_inconsistent) mask |= (1ULL << 21);
+  if(error.cartesian_motion_generator_start_elbow_invalid) mask |= (1ULL << 22);
+  if(error.cartesian_motion_generator_joint_position_limits_violation) mask |= (1ULL << 23);
+  if(error.cartesian_motion_generator_joint_velocity_limits_violation) mask |= (1ULL << 24);
+  if(error.cartesian_motion_generator_joint_velocity_discontinuity) mask |= (1ULL << 25);
+  if(error.cartesian_motion_generator_joint_acceleration_discontinuity) mask |= (1ULL << 26);
+  if(error.cartesian_position_motion_generator_invalid_frame) mask |= (1ULL << 27);
+  if(error.force_controller_desired_force_tolerance_violation) mask |= (1ULL << 28);
+  if(error.controller_torque_discontinuity) mask |= (1ULL << 29);
+  if(error.start_elbow_sign_inconsistent) mask |= (1ULL << 30);
+  if(error.communication_constraints_violation) mask |= (1ULL << 31);
+  if(error.power_limit_violation) mask |= (1ULL << 32);
+  if(error.joint_p2p_insufficient_torque_for_planning) mask |= (1ULL << 33);
+  if(error.tau_j_range_violation) mask |= (1ULL << 34);
+  if(error.instability_detected) mask |= (1ULL << 35);
+  if(error.joint_move_in_wrong_direction) mask |= (1ULL << 36);
+  if(error.cartesian_spline_motion_generator_violation) mask |= (1ULL << 37);
+  if(error.joint_via_motion_generator_planning_joint_limit_violation) mask |= (1ULL << 38);
+  if(error.base_acceleration_initialization_timeout) mask |= (1ULL << 39);
+  if(error.base_acceleration_invalid_reading) mask |= (1ULL << 40);
+  if(static_cast<bool>(error) && mask==0) mask=(1ULL<<63);
+  return mask;
+}
+mozi::Sample mozi_state_sample(const franka::RobotState& s) noexcept {
+  mozi::Sample sample;
+  sample.mono=mozi::mono_ns();sample.wall=mozi::wall_ns();
+  sample.robot_ms=s.time.toMSec();sample.robot_mode=static_cast<uint32_t>(s.robot_mode);
+  sample.current_errors=mozi_error_mask(s.current_errors);
+  sample.last_motion_errors=mozi_error_mask(s.last_motion_errors);
+  sample.success_rate=s.control_command_success_rate;
+  sample.q=s.q;sample.dq=s.dq;sample.q_d=s.q_d;sample.dq_d=s.dq_d;
+  sample.tau=s.tau_J;sample.tau_d=s.tau_J_d;sample.tau_ext=s.tau_ext_hat_filtered;
+  sample.O_T_EE=s.O_T_EE;sample.O_F_ext_hat_K=s.O_F_ext_hat_K;
+  sample.joint_contact=s.joint_contact;sample.joint_collision=s.joint_collision;
+  sample.cartesian_contact=s.cartesian_contact;sample.cartesian_collision=s.cartesian_collision;
+  sample.valid=1;return sample;
+}
+} // namespace
+
+
 FrankaTorqueControlClient::FrankaTorqueControlClient(
     std::shared_ptr<grpc::Channel> channel, YAML::Node config)
     : stub_(PolymetisControllerServer::NewStub(channel)) {
@@ -42,6 +106,24 @@ FrankaTorqueControlClient::FrankaTorqueControlClient(
   Empty empty;
   Status status = stub_->InitRobotClient(&context, metadata, &empty);
   assert(status.ok());
+
+  // Allocate diagnostic buffers before connecting/entering the control loop.
+  // Output failures and disabled diagnostics never affect motion decisions.
+  const char* enabled=std::getenv("MOZI_NATIVE_FAULT_WINDOW");
+  if(!enabled || std::string(enabled)!="0") {
+    try {
+      mozi::Options options;
+      const char* directory=std::getenv("MOZI_FAULT_WINDOW_DIR");
+      options.directory=std::string(directory?directory:"/home/pnp/frankateleop/logs/fault_windows/native")+"/"+std::to_string(getpid());
+      YAML::Emitter yaml;yaml<<config;
+      const char* trigger_name=std::getenv("MOZI_FAULT_TRIGGER_NAME");
+      options.trigger_name=trigger_name?trigger_name:"mozi_fault_native";
+      options.metadata="{\"pid\":"+std::to_string(getpid())+",\"config_yaml\":"+mozi::FaultWindow::quote(yaml.c_str())+
+        ",\"urdf_xml\":"+mozi::FaultWindow::quote(metadata.urdf_file().c_str())+
+        ",\"error_names\":[\"joint_position_limits_violation\",\"cartesian_position_limits_violation\",\"self_collision_avoidance_violation\",\"joint_velocity_violation\",\"cartesian_velocity_violation\",\"force_control_safety_violation\",\"joint_reflex\",\"cartesian_reflex\",\"max_goal_pose_deviation_violation\",\"max_path_pose_deviation_violation\",\"cartesian_velocity_profile_safety_violation\",\"joint_position_motion_generator_start_pose_invalid\",\"joint_motion_generator_position_limits_violation\",\"joint_motion_generator_velocity_limits_violation\",\"joint_motion_generator_velocity_discontinuity\",\"joint_motion_generator_acceleration_discontinuity\",\"cartesian_position_motion_generator_start_pose_invalid\",\"cartesian_motion_generator_elbow_limit_violation\",\"cartesian_motion_generator_velocity_limits_violation\",\"cartesian_motion_generator_velocity_discontinuity\",\"cartesian_motion_generator_acceleration_discontinuity\",\"cartesian_motion_generator_elbow_sign_inconsistent\",\"cartesian_motion_generator_start_elbow_invalid\",\"cartesian_motion_generator_joint_position_limits_violation\",\"cartesian_motion_generator_joint_velocity_limits_violation\",\"cartesian_motion_generator_joint_velocity_discontinuity\",\"cartesian_motion_generator_joint_acceleration_discontinuity\",\"cartesian_position_motion_generator_invalid_frame\",\"force_controller_desired_force_tolerance_violation\",\"controller_torque_discontinuity\",\"start_elbow_sign_inconsistent\",\"communication_constraints_violation\",\"power_limit_violation\",\"joint_p2p_insufficient_torque_for_planning\",\"tau_j_range_violation\",\"instability_detected\",\"joint_move_in_wrong_direction\",\"cartesian_spline_motion_generator_violation\",\"joint_via_motion_generator_planning_joint_limit_violation\",\"base_acceleration_initialization_timeout\",\"base_acceleration_invalid_reading\"]}";
+      mozi_capture_=std::make_unique<mozi::FaultWindow>(std::move(options));
+    }catch(const std::exception& ex){spdlog::warn("Native diagnostic capture unavailable: {}",ex.what());}
+  }
 
   // Connect to robot
   mock_franka_ = config["mock"].as<bool>();
@@ -130,9 +212,16 @@ void FrankaTorqueControlClient::run() {
   // Create callback function that relays information between gRPC server and
   // robot
   auto control_callback = [&](const franka::RobotState &libfranka_robot_state,
-                              franka::Duration) -> franka::Torques {
+                              franka::Duration period) -> franka::Torques {
+    auto diagnostic=mozi_state_sample(libfranka_robot_state);
+    diagnostic.period_us=period.toMSec()*1000ULL;
+    diagnostic.rpc_begin=mozi::mono_ns();
+    try {
     // Compute torque components
     updateServerCommand(libfranka_robot_state, torque_commanded_);
+    diagnostic.rpc_end=mozi::mono_ns();
+    diagnostic.state_wall=uint64_t(robot_state_.timestamp().seconds())*1000000000ULL+robot_state_.timestamp().nanos();
+    diagnostic.torque_wall=uint64_t(torque_command_.timestamp().seconds())*1000000000ULL+torque_command_.timestamp().nanos();
     checkStateLimits(libfranka_robot_state, torque_safety_);
 
     // Aggregate & clamp torques
@@ -147,7 +236,22 @@ void FrankaTorqueControlClient::run() {
                                                            torque_applied_[i]);
     }
 
+    diagnostic.policy_torque=torque_commanded_;
+    diagnostic.safety_torque=torque_safety_;
+    diagnostic.returned_torque=torque_applied_;
+    diagnostic.valid|=2;
+    if(mozi_capture_) {
+      mozi_capture_->record(diagnostic);
+      if(diagnostic.rpc_end-diagnostic.rpc_begin>100000000ULL)
+        mozi_capture_->event("control_update_slow","",true);
+    }
     return torque_applied_;
+    } catch(...) {
+      diagnostic.rpc_end=mozi::mono_ns();
+      diagnostic.state_wall=uint64_t(robot_state_.timestamp().seconds())*1000000000ULL+robot_state_.timestamp().nanos();
+      if(mozi_capture_)mozi_capture_->record(diagnostic);
+      throw;
+    }
   };
 
   // Run robot
@@ -158,6 +262,19 @@ void FrankaTorqueControlClient::run() {
       try {
         robot_ptr_->control(control_callback, limit_rate_, lpf_cutoff_freq_);
       } catch (const std::exception &ex) {
+        if(mozi_capture_) {
+          uint64_t error_mask=0;
+          const auto* control=dynamic_cast<const franka::ControlException*>(&ex);
+          if(control && !control->log.empty()) {
+            // Last raw state can carry an error not delivered to the callback.
+            // Its source time is the robot time, not this catch's collection time.
+            auto last=mozi_state_sample(control->log.back().state);
+            last.source=1;
+            error_mask=last.current_errors|last.last_motion_errors;
+            mozi_capture_->record(last);
+          }
+          mozi_capture_->event("control_exception",ex.what(),true,error_mask);
+        }
         spdlog::error("Robot is unable to be controlled: {}", ex.what());
         is_robot_operational = false;
       }
@@ -171,16 +288,20 @@ void FrankaTorqueControlClient::run() {
                      RECOVERY_MAX_TRIES);
 
         // Wait
+        if(mozi_capture_)mozi_capture_->event("recovery_wait", "configured_one_second");
         usleep(1000000 * RECOVERY_WAIT_SECS);
 
         // Attempt recovery
         try {
+          if(mozi_capture_)mozi_capture_->event("recovery_begin");
           robot_ptr_->automaticErrorRecovery();
+          if(mozi_capture_)mozi_capture_->event("recovery_success");
           spdlog::warn("Robot operation recovered.");
           is_robot_operational = true;
           break;
 
         } catch (const std::exception &ex) {
+          if(mozi_capture_)mozi_capture_->event("recovery_failed",ex.what(),true);
           spdlog::error("Recovery failed: {}", ex.what());
         }
       }
