@@ -125,6 +125,13 @@ def start(robot, start_ns):
 def finish(robot):
     """Stop native motion before restoring a controller anchored at measured q."""
     record=active(robot)
+    raw,state=observed(robot)
+    # MotionFinished is only valid at a stationary reference endpoint. A peer
+    # fault or operator stop during motion must abort and retain ownership.
+    if state['phase']!=3 or max(abs(v) for v in state['dq_d'])>=.001:
+        robot.robot.update_current_policy(dict(finish=torch.full((1,),2.),
+            lease_wall_ns=torch.tensor([float(time.time_ns()+3_000_000_000)],dtype=torch.float64)))
+        raise RuntimeError('Native experiment aborted before stationary endpoint; reservation retained for recovery')
     robot.robot.update_current_policy(dict(finish=torch.ones(1),
         lease_wall_ns=torch.tensor([float(time.time_ns()+3_000_000_000)],dtype=torch.float64)))
     deadline=time.monotonic()+2

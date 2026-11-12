@@ -81,6 +81,34 @@ def test_c_never_submits_external_impedance_torque():
         assert c(state(path=2))['native_tracking_command'][2]==1
 
 
+def test_mid_motion_finish_aborts_without_restoring_a(monkeypatch):
+    from types import SimpleNamespace
+    from teleop import tracking_native
+    import pytest
+    updates=[]
+    robot=SimpleNamespace(robot=SimpleNamespace(update_current_policy=updates.append))
+    monkeypatch.setattr(tracking_native,'active',lambda _:dict(record_id=123))
+    for phase,velocity in ((2,0.),(3,.01)):
+        monkeypatch.setattr(tracking_native,'observed',lambda _:(None,dict(phase=phase,dq_d=[velocity]*7)))
+        with pytest.raises(RuntimeError,match='aborted before stationary endpoint'):
+            tracking_native.finish(robot)
+        assert updates[-1]['finish'].item()==2
+
+
+def test_latched_fault_finish_does_not_mutate_policy(monkeypatch):
+    from types import SimpleNamespace
+    from teleop import tracking_native
+    import pytest
+    updates=[]
+    robot=SimpleNamespace(robot=SimpleNamespace(update_current_policy=updates.append))
+    monkeypatch.setattr(tracking_native,'active',lambda _:dict(record_id=123))
+    def failed(_):raise RuntimeError('Latched native experiment/recorder fault')
+    monkeypatch.setattr(tracking_native,'observed',failed)
+    with pytest.raises(RuntimeError,match='Latched'):
+        tracking_native.finish(robot)
+    assert not updates
+
+
 if __name__=='__main__':
     for name,fn in list(globals().items()):
-        if name.startswith('test_'):fn();print('PASS',name)
+        if name.startswith('test_') and not fn.__code__.co_argcount:fn();print('PASS',name)
