@@ -234,6 +234,14 @@ def fails(fn,text):
 
 def test_static_freeze_never_relatches_measured_and_samples_same_state():
     r=static_robot();before=len(r.robot.updates)
+    from teleop.native_observation import pose
+    read=r.get_feedback_observations
+    def native_feedback(**kwargs):
+        raw=read(**kwargs)
+        matrix=np.eye(4);matrix[:3,3]=r.measured[:3]
+        raw['ee_pos_quat']=pose(matrix)
+        return raw
+    r.get_feedback_observations=native_feedback
     frozen=static.freeze(r)
     assert len(r.robot.updates)==before, 'Freeze must not command the measured pose or restart the policy'
     assert abs(frozen['q_ref'][0]-.01)<1e-8 and frozen['q_ref']!=r.measured

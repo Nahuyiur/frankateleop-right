@@ -111,7 +111,7 @@ def sample(robot):
         qt, dqt, zero = torch.tensor(q,dtype=torch.float32), torch.tensor(dq,dtype=torch.float32), torch.zeros(7)
         feedforward = model.inverse_dynamics(qt, dqt, zero)-model.inverse_dynamics(qt, zero, zero)
     return dict(source_ns=int(raw['state_timestamp_ns']), q=q, dq=dq,
-                eef=vector(list(raw['ee_pos_quat']), 7, 'native flange pose'), fk_measured=fk(model, q),
+                eef=vector([float(v) for v in raw['ee_pos_quat']], 7, 'native flange pose'), fk_measured=fk(model, q),
                 feedforward_Nm=vector(feedforward.detach().cpu().tolist(), 7, 'software feedforward'),
                 feedforward_source='same inverse-dynamics formula evaluated on this cached native sample',
                 torque_measured=vector(list(raw['joint_torques']), 7, 'measured torque'),
