@@ -47,7 +47,7 @@ def configure(robot, artifact, sha256, path, record_id, stiffness):
         poses=stored['poses'].copy()
         metadata=json.loads(str(stored['metadata'].item()))
     peaks=check(poses)
-    check_native_mode(path,poses)
+    check_native_mode(path,poses,metadata)
     if hashlib.sha256(poses.astype('<f8').tobytes()).hexdigest()!=metadata['processed_sha256']:
         raise ValueError('Processed reference checksum mismatch')
     raw,state=observed(robot)

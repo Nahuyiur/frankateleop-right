@@ -6,16 +6,43 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.transform import Rotation
 
 VERSION='native-reference-50ms-v1'
+PROBE_VERSION='native-short-probe-v1'
 LIMITS=dict(translation_velocity=2.4,translation_acceleration=7.2,translation_jerk=3600.,
             rotation_velocity=2.,rotation_acceleration=13.6,rotation_jerk=6800.)
 
 
-def check_native_mode(path,poses):
+def check_native_mode(path,poses,metadata=None):
     # Run 22 contacted the table. Keep dynamic C disabled at the backend too,
     # including callers which bypass the console's mode selector.
     a=np.asarray(poses)
+    if (metadata or {}).get('version')==PROBE_VERSION:
+        tool=matrix(metadata['F_T_EE'])
+        origin=matrix(a[0])@np.linalg.inv(tool)
+        expected,_,_=probe(np.r_[origin[:3,3],Rotation.from_matrix(origin[:3,:3]).as_quat()],metadata['F_T_EE'])
+        if a.shape!=expected.shape or not np.allclose(a,expected,rtol=0,atol=1e-10):
+            raise ValueError('Short probe must exactly match the fixed 8 s, 5 mm / 1 degree profile')
+        return
     if path=='C' and not np.array_equal(a,np.broadcast_to(a[0],a.shape)):
         raise ValueError('Dynamic C disabled after run 22 table collision; independent validation required')
+
+
+def probe(flange_pose,tool):
+    """Small out-and-back diagnostic, separate from the fixed-trajectory comparison."""
+    t=np.arange(8001)*.001
+    u=np.minimum(t,8.-t)/4.
+    weight=10*u**3-15*u**4+6*u**5
+    origin=np.asarray(flange_pose,dtype=float)
+    rotations=Rotation.from_quat(origin[3:])*Rotation.from_rotvec(
+        np.c_[np.zeros(len(t)),weight*np.pi/180.,np.zeros(len(t))])
+    flange=np.tile(np.eye(4),(len(t),1,1))
+    flange[:,:3,:3]=rotations.as_matrix();flange[:,:3,3]=origin[:3]
+    flange[:,2,3]+=.005*weight
+    poses=(flange@matrix(tool)).transpose(0,2,1).reshape(-1,16).astype('<f8')
+    return poses,np.c_[flange[:,:3,3],rotations.as_quat()],dict(
+        version=PROBE_VERSION,speed=1.,sample_period_s=.001,duration_s=8.,
+        processed_sha256=hashlib.sha256(poses.tobytes()).hexdigest(),F_T_EE=list(tool),
+        peaks=check(poses),diagnostic_only=True,
+        profile='4 s quintic outbound + 4 s return; flange base Z +5 mm and local Y +1 degree; stationary endpoints')
 
 
 def matrix(values):
