@@ -505,6 +505,12 @@ class fr3Robot(Robot):
         target_rotation = Rotation.from_quat(np.asarray(orientation, dtype=float).reshape(4))
         q, info = dik_solve(fk, jacobian, seed, target_position, target_rotation)
         q = seed + np.clip(q - seed, -DIK_STEP_MAX_RAD, DIK_STEP_MAX_RAD)
+        if getattr(self, '_tracking_static_config', None) is not None:
+            from teleop.tracking_static import select_target
+            q = select_target(self, q, seed)
+            actual_position, actual_rotation = fk(q)
+            info['residual_m'] = float(np.linalg.norm(target_position-actual_position))
+            info['residual_rad'] = float((target_rotation*actual_rotation.inv()).magnitude())
         if not np.all(np.isfinite(q)):
             return -1, None
         offset = q - measured

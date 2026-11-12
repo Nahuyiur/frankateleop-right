@@ -37,6 +37,10 @@ def clear(robot):
     robot._tracking_reference = None
     robot._tracking_velocity_mode = None
     robot._tracking_velocity_sample = None
+    robot._tracking_static_config = None
+    robot._tracking_static_frozen = None
+    robot._tracking_last_target = None
+    robot._tracking_had_hold = False
 
 
 def start(robot):
@@ -54,7 +58,8 @@ def start(robot):
     files = [Path(__file__),Path(inspect.getfile(type(robot))),
              Path(inspect.getfile(type(interface))),Path(inspect.getfile(TrackingHybridJointImpedanceControl)),
              Path(inspect.getfile(TrackingHybridJointImpedanceControl.__bases__[0])),
-             Path(inspect.getfile(validate_gains)),Path(inspect.getfile(type(policy.joint_pd)))]
+             Path(inspect.getfile(validate_gains)),Path(inspect.getfile(type(policy.joint_pd))),
+             Path(__file__).with_name('tracking_static.py')]
     reference=robot._tracking_reference
     law=control_law(robot._tracking_velocity_mode)
     record = dict(gains=actual, formula=law['formula'], control_law_id=law['id'], velocity_formula=law['velocity_formula'], controller='TrackingHybridJointImpedanceControl',
@@ -71,6 +76,9 @@ def start(robot):
     robot._tracking_velocity_sequence = 0
     robot._tracking_velocity_sample = None
     robot._tracking_last_update_monotonic = None
+    robot._tracking_static_frozen = None
+    robot._tracking_last_target = None
+    robot._tracking_had_hold = False
 
 
 def update_target(robot, joints, position=None, quaternion=None, *, hold=False):
@@ -87,6 +95,10 @@ def update_target(robot, joints, position=None, quaternion=None, *, hold=False):
     now=time.monotonic()
     previous_time=robot._tracking_last_update_monotonic
     resumed=previous_time is not None and now-previous_time>=VELOCITY_REFERENCE['stale_zero_s']
+    if not hold and getattr(robot, '_tracking_static_frozen', None) is not None:
+        raise RuntimeError('Static reference is frozen; release before sending another target')
+    if hold:
+        robot._tracking_had_hold = True
     if not hold:
         if index>=len(reference['times_ns']):
             raise RuntimeError('Unexpected extra target after fixed trajectory')
@@ -120,6 +132,9 @@ def update_target(robot, joints, position=None, quaternion=None, *, hold=False):
     if not hold:
         robot._tracking_reference_index=index+1
         robot._tracking_impedance_applied['reference']['accepted']=index+1
+        robot._tracking_last_target = dict(q_ref=joints.tolist(), eef_reference=expected.tolist(),
+            reference_source_ns=reference['times_ns'][index], reference_index=index,
+            target_sequence=sequence, parameter_update_index=int(updated), acknowledged_ns=time.time_ns())
     robot._tracking_velocity_sample=dict(velocity_mode=robot._tracking_velocity_mode,reference_index=index if not hold else None,
         reference_source_ns=reference['times_ns'][index] if not hold else None,dt_s=dt,
         raw_joint_velocity=raw.tolist(),desired_joint_velocity=velocity.tolist(),limited=clipped,

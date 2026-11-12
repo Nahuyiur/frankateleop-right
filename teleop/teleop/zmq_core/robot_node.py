@@ -91,16 +91,17 @@ class ZMQServerRobot:
                     token = args.pop("replay_token", None)
                     motion_methods = {"command_joint_state", "command_ee_pose", "move_to_joint_positions",
                                       "command_replay_joints", "set_replay_mode", "release_replay",
-                                      "ensure_cartesian_teleop", "command_gripper", "configure_tracking_impedance"}
+                                      "ensure_cartesian_teleop", "command_gripper", "configure_tracking_impedance",
+                                      "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample"}
                     if method in motion_methods:
                         if self._replay_token is not None and token != self._replay_token:
                             raise RuntimeError("robot is reserved for episode replay")
                         if token is not None and token != self._replay_token:
                             raise RuntimeError("replay reservation is no longer valid")
-                        if method in {"set_replay_mode", "command_replay_joints", "release_replay", "configure_tracking_impedance"} and not self._replay_token:
+                        if method in {"set_replay_mode", "command_replay_joints", "release_replay", "configure_tracking_impedance", "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample"} and not self._replay_token:
                             raise RuntimeError("replay reservation required")
                     if method == "get_replay_capabilities":
-                        result = {"version": 1, "recording_observations": True, "reserved": self._replay_token is not None, "replay_feedback": True, "tracking_impedance": 3}
+                        result = {"version": 1, "recording_observations": True, "reserved": self._replay_token is not None, "replay_feedback": True, "tracking_impedance": 3, "static_sampling": 1}
                     elif method == "reserve_replay":
                         if not isinstance(token, str) or not token:
                             raise ValueError("replay token required")
@@ -120,6 +121,16 @@ class ZMQServerRobot:
                             raise ValueError("configure_tracking_impedance requires gains, fixed trajectory reference and velocity_mode")
                         from teleop.tracking_impedance import configure
                         result = configure(self._robot, args["gains"], args["reference"], args["velocity_mode"])
+                    elif method == "configure_tracking_static":
+                        if set(args) != {"joint_target", "gripper_width"}:
+                            raise ValueError("Static configuration requires joint_target and gripper_width")
+                        from teleop.tracking_static import configure
+                        result = configure(self._robot, **args)
+                    elif method in {"freeze_tracking_target", "get_tracking_static_sample"}:
+                        if args:
+                            raise ValueError("Static snapshot accepts no arguments")
+                        from teleop.tracking_static import freeze, sample
+                        result = (freeze if method == "freeze_tracking_target" else sample)(self._robot)
                     elif method == "set_replay_mode":
                         result = self._robot.set_replay_mode(**args)
                     elif method == "command_replay_joints":
