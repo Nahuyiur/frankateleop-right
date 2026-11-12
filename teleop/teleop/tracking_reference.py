@@ -7,13 +7,17 @@ from scipy.spatial.transform import Rotation
 
 VERSION='native-reference-50ms-v1'
 PROBE_VERSION='native-short-probe-v1'
+GUARDED_C_CLIENT_SHA256='3ea6032106db7160cdca38e68f61a839117d62a19c5bc2f62d97e5444839d91b'
+GUARDED_C_REFERENCES=frozenset((
+    '0e457b6fae976de9e15a63397006bc7a1447cbb7231ca1ed14e38d99666155ba',
+    'ba2cad3eaf736dc8f50a90a3d77ca8947ce3b77d20517f279a888029212c1637'))
 LIMITS=dict(translation_velocity=2.4,translation_acceleration=7.2,translation_jerk=3600.,
             rotation_velocity=2.,rotation_acceleration=13.6,rotation_jerk=6800.)
 
 
 def check_native_mode(path,poses,metadata=None):
-    # Run 22 contacted the table. Keep dynamic C disabled at the backend too,
-    # including callers which bypass the console's mode selector.
+    # After workspace clearance and probes 25/26, allow only the approved
+    # reference, with configure() additionally requiring the guarded client.
     a=np.asarray(poses)
     if (metadata or {}).get('version')==PROBE_VERSION:
         tool=matrix(metadata['F_T_EE'])
@@ -23,6 +27,10 @@ def check_native_mode(path,poses,metadata=None):
             raise ValueError('Short probe must exactly match the fixed 8 s, 5 mm / 1 degree profile')
         return
     if path=='C' and not np.array_equal(a,np.broadcast_to(a[0],a.shape)):
+        meta=metadata or {}
+        if (meta.get('version')==VERSION and meta.get('speed')==.5 and len(a)==40689
+                and hashlib.sha256(a.astype('<f8').tobytes()).hexdigest() in GUARDED_C_REFERENCES):
+            return GUARDED_C_CLIENT_SHA256
         raise ValueError('Dynamic C disabled after run 22 table collision; independent validation required')
 
 

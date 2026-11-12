@@ -47,7 +47,7 @@ def configure(robot, artifact, sha256, path, record_id, stiffness):
         poses=stored['poses'].copy()
         metadata=json.loads(str(stored['metadata'].item()))
     peaks=check(poses)
-    check_native_mode(path,poses,metadata)
+    required_client=check_native_mode(path,poses,metadata)
     if hashlib.sha256(poses.astype('<f8').tobytes()).hexdigest()!=metadata['processed_sha256']:
         raise ValueError('Processed reference checksum mismatch')
     raw,state=observed(robot)
@@ -59,6 +59,9 @@ def configure(robot, artifact, sha256, path, record_id, stiffness):
         raise RuntimeError('Fixed measured gripper opening required')
     applied=snapshot(robot)['applied']
     if not applied or applied['controller']!='TrackingHybridJointImpedanceControl':raise RuntimeError('Verified A preparation policy required')
+    if required_client and applied.get('runtime',{}).get('binaries_sha256',{}).get(
+            '/home/pnp/frankateleop/polymetis/polymetis/build/franka_panda_client')!=required_client:
+        raise RuntimeError('Guarded C reference requires the verified 15 mm / 5 degree native client')
     gains=validate_gains(applied['gains'])
     if (not isinstance(stiffness,list) or len(stiffness)!=6 or
             any(type(v) not in (int,float) or not np.isfinite(v) or not 0<v<=(1500 if i<3 else 45) for i,v in enumerate(stiffness))):
