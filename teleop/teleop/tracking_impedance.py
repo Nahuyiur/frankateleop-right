@@ -2,10 +2,27 @@
 import copy
 import hashlib
 import inspect
+from functools import lru_cache
 from pathlib import Path
+import subprocess
 import time
 
 from teleop.tracking_gains import DEFAULT_VELOCITY_MODE, VELOCITY_REFERENCE, control_law, validate_gains, validate_reference
+
+
+@lru_cache(maxsize=1)
+def runtime_provenance():
+    """Read once outside the real-time loop; retain source and runtime identities."""
+    root=Path(__file__).resolve().parents[2]
+    def git(path,*args):
+        result=subprocess.run(['git','-C',str(path),*args],capture_output=True,text=True,timeout=2)
+        return result.stdout.strip() if result.returncode==0 else None
+    build=root/'polymetis/polymetis/build'
+    files=[build/'franka_panda_client',build/'run_server',build/'torch_isolation/libtorch_server_ops.so']
+    return dict(repository=str(root),commit=git(root,'rev-parse','HEAD'),
+        tracked_changes=git(root,'status','--porcelain','--untracked-files=no'),
+        libfranka=git('/home/pnp/libfranka','describe','--tags','--always'),
+        binaries_sha256={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in files if p.is_file()})
 
 
 def defaults(robot):
@@ -32,6 +49,8 @@ def configure(robot, gains, reference, velocity_mode=DEFAULT_VELOCITY_MODE):
 
 
 def clear(robot):
+    if getattr(robot,'_tracking_native',None):
+        raise RuntimeError('Finish native control before clearing the replay reservation')
     robot._tracking_impedance_override = None
     robot._tracking_impedance_applied = None
     robot._tracking_reference = None
@@ -41,6 +60,7 @@ def clear(robot):
     robot._tracking_static_frozen = None
     robot._tracking_last_target = None
     robot._tracking_had_hold = False
+    robot._tracking_record_id = 0
 
 
 def start(robot):
@@ -53,6 +73,7 @@ def start(robot):
     q = interface.get_joint_positions()
     policy = TrackingHybridJointImpedanceControl(joint_pos_current=q,
         robot_model=interface.robot_model, ignore_gravity=True,
+        record_id=getattr(robot,'_tracking_record_id',0),
         **{key:torch.tensor(value,dtype=torch.float32) for key,value in gains.items()})
     actual = {key:torch.diag(getattr(policy.joint_pd,key)).detach().cpu().tolist() for key in gains}
     files = [Path(__file__),Path(inspect.getfile(type(robot))),
@@ -63,7 +84,9 @@ def start(robot):
     reference=robot._tracking_reference
     law=control_law(robot._tracking_velocity_mode)
     record = dict(gains=actual, formula=law['formula'], control_law_id=law['id'], velocity_formula=law['velocity_formula'], controller='TrackingHybridJointImpedanceControl',
+        path='A',record_id=getattr(robot,'_tracking_record_id',0),
         hz=1000,velocity_reference=law['velocity_reference'],static_software_feedforward_Nm=[0.]*7,
+        runtime=runtime_provenance(),model_sha256=hashlib.sha256(interface.metadata.urdf_file.encode()).hexdigest(),
         reference=dict(sha256=reference['sha256'],count=len(reference['times_ns']),accepted=0),
         source='float32 gains in policy submitted to Polymetis; SetController acknowledged',
         software_sha256={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in files})
@@ -84,6 +107,11 @@ def start(robot):
 def update_target(robot, joints, position=None, quaternion=None, *, hold=False):
     """Pair each incoming EEF with the immutable fixed-replay time table, then differentiate DIK targets."""
     import torch
+    if getattr(robot,'_tracking_native',None):
+        if hold:
+            robot._tracking_had_hold=True
+            robot.robot.update_current_policy(dict(finish=torch.full((1,),2.)))
+        raise RuntimeError('Native experiment rejects DIK target/HOLD updates and is invalid after HOLD')
     joints=torch.as_tensor(joints,dtype=torch.float32).detach().clone()
     if joints.shape!=(7,) or not bool(torch.isfinite(joints).all()):
         raise ValueError('Invalid desired joint positions')

@@ -92,16 +92,17 @@ class ZMQServerRobot:
                     motion_methods = {"command_joint_state", "command_ee_pose", "move_to_joint_positions",
                                       "command_replay_joints", "set_replay_mode", "release_replay",
                                       "ensure_cartesian_teleop", "command_gripper", "configure_tracking_impedance",
-                                      "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample"}
+                                      "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample",
+                                      "configure_tracking_native", "get_tracking_native", "start_tracking_native", "finish_tracking_native", "configure_tracking_record"}
                     if method in motion_methods:
                         if self._replay_token is not None and token != self._replay_token:
                             raise RuntimeError("robot is reserved for episode replay")
                         if token is not None and token != self._replay_token:
                             raise RuntimeError("replay reservation is no longer valid")
-                        if method in {"set_replay_mode", "command_replay_joints", "release_replay", "configure_tracking_impedance", "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample"} and not self._replay_token:
+                        if method in {"set_replay_mode", "command_replay_joints", "release_replay", "configure_tracking_impedance", "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample", "configure_tracking_native", "get_tracking_native", "start_tracking_native", "finish_tracking_native", "configure_tracking_record"} and not self._replay_token:
                             raise RuntimeError("replay reservation required")
                     if method == "get_replay_capabilities":
-                        result = {"version": 1, "recording_observations": True, "reserved": self._replay_token is not None, "replay_feedback": True, "tracking_impedance": 3, "static_sampling": 1}
+                        result = {"version": 1, "recording_observations": True, "reserved": self._replay_token is not None, "replay_feedback": True, "tracking_impedance": 3, "static_sampling": 1, "native_tracking": 1}
                     elif method == "reserve_replay":
                         if not isinstance(token, str) or not token:
                             raise ValueError("replay token required")
@@ -131,6 +132,32 @@ class ZMQServerRobot:
                             raise ValueError("Static snapshot accepts no arguments")
                         from teleop.tracking_static import freeze, sample
                         result = (freeze if method == "freeze_tracking_target" else sample)(self._robot)
+                    elif method == "configure_tracking_record":
+                        value=args.get("record_id")
+                        if set(args)!={"record_id"} or type(value) is not int or not 0<value<2**48:
+                            raise ValueError("Invalid tracking recording ID")
+                        if getattr(self._robot,"_tracking_impedance_applied",None) is not None:
+                            raise RuntimeError("Configure recording before policy preparation")
+                        self._robot._tracking_record_id=value
+                        result={"record_id":value}
+                    elif method == "configure_tracking_native":
+                        if set(args)!={"artifact","sha256","path","record_id","stiffness"}:
+                            raise ValueError("Native configuration requires the verified preload and explicit mode")
+                        from teleop.tracking_native import configure
+                        result=configure(self._robot,**args)
+                    elif method == "get_tracking_native":
+                        if set(args)-{"heartbeat"} or type(args.get("heartbeat",True)) is not bool:
+                            raise ValueError("Native status accepts only a heartbeat flag")
+                        from teleop.tracking_native import status
+                        result=status(self._robot,**args)
+                    elif method == "start_tracking_native":
+                        if set(args)!={"start_ns"}:raise ValueError("Native start requires a shared start time")
+                        from teleop.tracking_native import start
+                        result=start(self._robot,**args)
+                    elif method == "finish_tracking_native":
+                        if args:raise ValueError("Native finish accepts no arguments")
+                        from teleop.tracking_native import finish
+                        result=finish(self._robot)
                     elif method == "set_replay_mode":
                         result = self._robot.set_replay_mode(**args)
                     elif method == "command_replay_joints":
@@ -139,6 +166,9 @@ class ZMQServerRobot:
                         # Restore a controller anchored at the current measured pose.
                         # Keep the reservation if restoring fails: fail closed.
                         from teleop.tracking_impedance import clear
+                        if getattr(self._robot,'_tracking_native',None):
+                            from teleop.tracking_native import finish
+                            finish(self._robot)
                         clear(self._robot)
                         self._robot.set_replay_mode(self._replay_original_mode)
                         self._replay_token = None

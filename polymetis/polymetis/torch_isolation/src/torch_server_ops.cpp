@@ -9,6 +9,7 @@
 #include <torch/script.h>
 #include <torch/torch.h>
 #include <vector>
+#include <cmath>
 
 extern "C" {
 
@@ -73,6 +74,10 @@ TorchRobotState::TorchRobotState(int num_dofs) {
   rs_joint_velocities_ = new TorchTensor{torch::zeros(num_dofs)};
   rs_motor_torques_measured_ = new TorchTensor{torch::zeros(num_dofs)};
   rs_motor_torques_external_ = new TorchTensor{torch::zeros(num_dofs)};
+  rs_native_q_d_ = new TorchTensor{torch::zeros(num_dofs)};
+  rs_native_dq_d_ = new TorchTensor{torch::zeros(num_dofs)};
+  rs_control_path_ = new TorchTensor{torch::zeros(1)};
+  rs_robot_ms_ = new TorchTensor{torch::zeros(1).to(torch::kFloat64)};
 
   state_dict_ = new StateDict{c10::Dict<std::string, torch::Tensor>()};
 
@@ -83,6 +88,10 @@ TorchRobotState::TorchRobotState(int num_dofs) {
                            rs_motor_torques_measured_->data);
   state_dict_->data.insert("motor_torques_external",
                            rs_motor_torques_external_->data);
+  state_dict_->data.insert("native_q_d", rs_native_q_d_->data);
+  state_dict_->data.insert("native_dq_d", rs_native_dq_d_->data);
+  state_dict_->data.insert("tracking_control_path", rs_control_path_->data);
+  state_dict_->data.insert("native_robot_ms", rs_robot_ms_->data);
 
   input_ = new TorchInput{std::vector<torch::jit::IValue>()};
   input_->data.push_back(state_dict_->data);
@@ -94,6 +103,10 @@ TorchRobotState::~TorchRobotState() {
   delete rs_joint_velocities_;
   delete rs_motor_torques_measured_;
   delete rs_motor_torques_external_;
+  delete rs_native_q_d_;
+  delete rs_native_dq_d_;
+  delete rs_control_path_;
+  delete rs_robot_ms_;
   delete state_dict_;
   delete input_;
 }
@@ -111,6 +124,18 @@ void TorchRobotState::update_state(int timestamp_s, int timestamp_ns,
     rs_motor_torques_measured_->data[i] = motor_torques_measured[i];
     rs_motor_torques_external_->data[i] = motor_torques_external[i];
   }
+}
+
+void TorchRobotState::update_native(const std::vector<float>& q_d,
+                                    const std::vector<float>& dq_d, int path, double robot_ms) {
+  if(q_d.size()!=num_dofs_ || dq_d.size()!=num_dofs_)
+    throw std::runtime_error("Invalid native target dimensions");
+  for(int i=0;i<num_dofs_;++i) {
+    rs_native_q_d_->data[i]=q_d[i];
+    rs_native_dq_d_->data[i]=dq_d[i];
+  }
+  rs_control_path_->data[0]=path;
+  rs_robot_ms_->data[0]=robot_ms;
 }
 
 TorchScriptedController::TorchScriptedController(
@@ -140,6 +165,32 @@ std::vector<float> TorchScriptedController::forward(TorchRobotState &input) {
 
   torch::jit::IValue key = torch::jit::IValue("joint_torques");
   torch::Tensor desired_torque = controller_state_dict.at(key).toTensor();
+  tracking_trace.clear();
+  native_command.clear();
+  auto trace_key=torch::jit::IValue("tracking_trace");
+  if(controller_state_dict.contains(trace_key)) {
+    auto trace=controller_state_dict.at(trace_key).toTensor();
+    if(trace.numel()!=22)throw std::runtime_error("Invalid tracking trace");
+    tracking_trace.reserve(22);
+    for(int i=0;i<22;++i)tracking_trace.push_back(trace[i].item<float>());
+  }
+  auto command_key=torch::jit::IValue("native_tracking_command");
+  if(controller_state_dict.contains(command_key)) {
+    auto command=controller_state_dict.at(command_key).toTensor();
+    if(command.numel()!=28)throw std::runtime_error("Invalid native tracking command");
+    native_command.reserve(28);
+    for(int i=0;i<28;++i) {
+      double value=command[i].item<double>();
+      if(!std::isfinite(value))throw std::runtime_error("Nonfinite native tracking command");
+      native_command.push_back(value);
+    }
+    for(int i:{0,1,2,3,27})if(native_command[i]!=std::floor(native_command[i]))
+      throw std::runtime_error("Native tracking IDs/phases must be integers");
+    if(native_command[0]<0 || native_command[0]>2 || native_command[1]<0 || native_command[1]>=281474976710656. ||
+       native_command[2]<0 || native_command[2]>2 || native_command[3]<-1 || native_command[3]>60000 ||
+       native_command[27]<0 || native_command[27]>3)
+      throw std::runtime_error("Native tracking command outside its bounds");
+  }
 
   std::vector<float> result;
   for (int i = 0; i < input.num_dofs_; i++) {

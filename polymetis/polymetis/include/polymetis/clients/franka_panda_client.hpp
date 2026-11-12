@@ -9,6 +9,7 @@
 #include <memory>
 #include <thread>
 #include "mozi_fault_window.hpp"
+#include "mozi_tracking_tape.hpp"
 
 #include "yaml-cpp/yaml.h"
 
@@ -28,6 +29,14 @@
 class FrankaTorqueControlClient {
 private:
   std::unique_ptr<mozi::FaultWindow> mozi_capture_;
+  std::unique_ptr<mozi::TrackingTape> tracking_tape_;
+  unsigned tracking_path_=0; // 0 A, 1 B, 2 C, 3 stopped handoff, 4 latched fault
+  uint64_t native_cycle_=0, previous_command_robot_ms_=0, stationary_since_=0;
+  uint64_t native_record_id_=0;
+  double previous_source_index_=-1;
+  std::array<double,16> native_initial_pose_{};
+  bool native_initial_set_=false;
+  void recordTracking(const franka::RobotState& state, const std::array<double,16>& pose);
   void updateServerCommand(const franka::RobotState &libfranka_robot_state,
                            std::array<double, NUM_DOFS> &torque_out);
   void checkStateLimits(const franka::RobotState &libfranka_robot_state,

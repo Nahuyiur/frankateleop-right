@@ -69,6 +69,16 @@ def arm_observation(state):
         result['control_command_success_rate'] = rate
         result['command_execution_confirmed'] = None
         result['native_state_valid'] = True
+        # Optional on older clients. Native experiment admission requires these.
+        if hasattr(state,'tracking_control_path'):
+            result['tracking_native'] = dict(path=int(state.tracking_control_path),
+                cycle=int(state.native_cycle),phase=int(state.tracking_phase),
+                source_index=int(state.tracking_source_index),record_id=int(state.tracking_record_id),
+                log_ready_id=int(state.tracking_log_ready_id),log_failed=bool(state.tracking_log_failed),
+                q_d=list(state.native_q_d),dq_d=list(state.native_dq_d),
+                O_T_EE_d=list(state.o_t_ee_d),O_T_EE_c=list(state.o_t_ee_c),EE_T_K=list(state.ee_t_k),
+                m_ee=float(state.m_ee),F_x_Cee=list(state.f_x_cee),
+                m_load=float(state.m_load),F_x_Cload=list(state.f_x_cload))
     except (ValueError, TypeError) as exc:
         # No fabricated pose or fallback to a stale/desired position.
         for key in ('ee_pos_quat', 'ee_pose_euler'):

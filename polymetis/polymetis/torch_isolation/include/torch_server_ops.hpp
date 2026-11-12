@@ -30,6 +30,10 @@ private:
   struct TorchTensor *rs_joint_velocities_ = nullptr;
   struct TorchTensor *rs_motor_torques_measured_ = nullptr;
   struct TorchTensor *rs_motor_torques_external_ = nullptr;
+  struct TorchTensor *rs_native_q_d_ = nullptr;
+  struct TorchTensor *rs_native_dq_d_ = nullptr;
+  struct TorchTensor *rs_control_path_ = nullptr;
+  struct TorchTensor *rs_robot_ms_ = nullptr;
 
 public:
   TorchRobotState(int num_dofs);
@@ -39,6 +43,8 @@ public:
                     std::vector<float> joint_velocities,
                     std::vector<float> motor_torques_measured,
                     std::vector<float> motor_torques_external);
+  void update_native(const std::vector<float>& q_d, const std::vector<float>& dq_d,
+                     int control_path, double robot_ms);
   struct TorchInput *input_ = nullptr;
   int num_dofs_;
 };
@@ -60,6 +66,9 @@ public:
   void warmup_controller(int warmup_iters, TorchRobotState &init_robot_state);
 
   std::vector<float> forward(TorchRobotState &input);
+  // Empty for ordinary policies. Read immediately under the controller mutex.
+  std::vector<float> tracking_trace;
+  std::vector<double> native_command;
 
   bool param_dict_load(char *data, size_t size);
   void param_dict_update_module();

@@ -5,6 +5,7 @@
 #include "polymetis/clients/franka_panda_client.hpp"
 
 #include "real_time.hpp"
+#include "mozi_native_reference.hpp"
 #include "spdlog/spdlog.h"
 #include "yaml-cpp/yaml.h"
 #include <Eigen/Dense>
@@ -124,6 +125,8 @@ FrankaTorqueControlClient::FrankaTorqueControlClient(
       mozi_capture_=std::make_unique<mozi::FaultWindow>(std::move(options));
     }catch(const std::exception& ex){spdlog::warn("Native diagnostic capture unavailable: {}",ex.what());}
   }
+
+  tracking_tape_=std::make_unique<mozi::TrackingTape>("/home/pnp/frankateleop/logs/tracking_native");
 
   // Connect to robot
   mock_franka_ = config["mock"].as<bool>();
@@ -245,6 +248,25 @@ void FrankaTorqueControlClient::run() {
       if(diagnostic.rpc_end-diagnostic.rpc_begin>100000000ULL)
         mozi_capture_->event("control_update_slow","",true);
     }
+    if(tracking_path_==0)recordTracking(libfranka_robot_state,libfranka_robot_state.O_T_EE_c);
+    const auto& command=torque_command_.native_tracking();
+    if(tracking_path_==1) {
+      if(!mozi::native_route(1,command.path(),torque_command_.tracking_policy_path(),torque_command_.tracking_valid(),
+                            command.record_id(),native_record_id_,command.finish()))
+        return franka::MotionFinished(franka::Torques(torque_applied_));
+    }
+    if(tracking_path_==0 && command.path()>0) {
+      if(!mozi::native_route(command.path(),command.path(),torque_command_.tracking_policy_path(),torque_command_.tracking_valid(),
+                            command.record_id(),command.record_id(),command.finish()))
+        return franka::MotionFinished(franka::Torques(torque_applied_));
+      bool stationary=true;
+      for(double dq:libfranka_robot_state.dq)stationary=stationary && std::abs(dq)<.01;
+      if(!stationary)stationary_since_=0;
+      else if(!stationary_since_)stationary_since_=libfranka_robot_state.time.toMSec();
+      if(stationary_since_ && libfranka_robot_state.time.toMSec()-stationary_since_>=2000 &&
+          tracking_tape_->ready()==command.record_id())
+        return franka::MotionFinished(franka::Torques(torque_applied_));
+    } else stationary_since_=0;
     return torque_applied_;
     } catch(...) {
       diagnostic.rpc_end=mozi::mono_ns();
@@ -256,53 +278,102 @@ void FrankaTorqueControlClient::run() {
 
   // Run robot
   if (!mock_franka_ && !readonly_mode_) {
-    bool is_robot_operational = true;
-    while (is_robot_operational) {
-      // Send lambda function
+    auto pose_callback = [&](const franka::RobotState& state,franka::Duration) -> franka::CartesianPose {
+      // B's torque callback has already processed this SAME state. C has no torque callback.
+      if(tracking_path_==2) {
+        updateServerCommand(state,torque_commanded_);
+        checkStateLimits(state,torque_safety_);
+        // C cannot apply our external reflex torque: stop at the same guard instead.
+        for(double value:torque_safety_)
+          if(!std::isfinite(value) || std::abs(value)>1e-9)
+            throw std::runtime_error("Native Cartesian reference reached existing software safety margin");
+      }
+      const auto& command=torque_command_.native_tracking();
+      mozi::native_route(tracking_path_,command.path(),torque_command_.tracking_policy_path(),torque_command_.tracking_valid(),
+                         command.record_id(),native_record_id_,command.finish());
+      if(command.pose_size()!=16)throw std::runtime_error("Native pose requires 16 values");
+      if(!native_initial_set_) {
+        native_initial_pose_=state.O_T_EE_c;
+        native_initial_set_=true;
+      }
+      std::array<double,16> desired;
+      for(int i=0;i<16;++i)desired[i]=command.pose(i);
+      auto pose=mozi::native_reference(native_initial_pose_,desired,command.prelude_blend(),command.phase());
+      recordTracking(state,pose);
+      if(command.finish()==1)return franka::MotionFinished(franka::CartesianPose(pose));
+      return franka::CartesianPose(pose);
+    };
+    for(;;) {
       try {
-        robot_ptr_->control(control_callback, limit_rate_, lpf_cutoff_freq_);
-      } catch (const std::exception &ex) {
+        if(tracking_path_>=3) {
+          // Read-only stopped handoff. A fallback/default policy cannot resume motion.
+          // A latched fault requires operator recovery/restart, never automatic A fallback.
+          robot_ptr_->read([&](const franka::RobotState& state) {
+            updateServerCommand(state,torque_commanded_);
+            return !(tracking_path_==3 && torque_command_.tracking_valid() &&
+                     torque_command_.tracking_policy_path()==0 &&
+                     torque_command_.native_tracking().path()==0);
+          });
+          tracking_path_=0;
+        }
+        if(tracking_path_==0) {
+          robot_ptr_->control(control_callback,limit_rate_,lpf_cutoff_freq_);
+          if(torque_command_.native_tracking().finish()==1){tracking_path_=3;continue;}
+          tracking_path_=torque_command_.native_tracking().path();
+          native_record_id_=torque_command_.native_tracking().record_id();
+          if(tracking_path_!=1 && tracking_path_!=2)
+            throw std::runtime_error("Unexpected torque control completion");
+          native_initial_set_=false;
+          previous_source_index_=-1;
+          previous_command_robot_ms_=0;
+        } else {
+          if(tracking_path_==1)robot_ptr_->control(control_callback,pose_callback,limit_rate_,lpf_cutoff_freq_);
+          else {
+            const auto& stiffness=torque_command_.native_tracking().stiffness();
+            if(stiffness.size()!=6)throw std::runtime_error("Cartesian stiffness requires six values");
+            std::array<double,6> values;
+            for(int i=0;i<6;++i) {
+              values[i]=stiffness[i];
+              if(!std::isfinite(values[i]) || values[i]<=0 || values[i]>(i<3?1500.:45.))
+                throw std::runtime_error("Cartesian stiffness outside experiment bounds");
+            }
+            robot_ptr_->setCartesianImpedance(values);
+            robot_ptr_->control(pose_callback,franka::ControllerMode::kCartesianImpedance,limit_rate_,lpf_cutoff_freq_);
+          }
+          tracking_path_=3;
+        }
+      } catch(const std::exception& ex) {
         if(mozi_capture_) {
-          uint64_t error_mask=0;
+          uint64_t mask=0;
           const auto* control=dynamic_cast<const franka::ControlException*>(&ex);
           if(control && !control->log.empty()) {
-            // Last raw state can carry an error not delivered to the callback.
-            // Its source time is the robot time, not this catch's collection time.
             auto last=mozi_state_sample(control->log.back().state);
-            last.source=1;
-            error_mask=last.current_errors|last.last_motion_errors;
+            last.source=1;mask=last.current_errors|last.last_motion_errors;
             mozi_capture_->record(last);
           }
-          mozi_capture_->event("control_exception",ex.what(),true,error_mask);
+          mozi_capture_->event("control_exception",ex.what(),true,mask);
         }
-        spdlog::error("Robot is unable to be controlled: {}", ex.what());
-        is_robot_operational = false;
-      }
-
-      // Automatic recovery
-      spdlog::warn("Performing automatic error recovery. This calls "
-                   "franka::Robot::automaticErrorRecovery, which is equivalent "
-                   "to pressing and releasing the external activation device.");
-      for (int i = 0; i < RECOVERY_MAX_TRIES; i++) {
-        spdlog::warn("Automatic error recovery attempt {}/{}...", i + 1,
-                     RECOVERY_MAX_TRIES);
-
-        // Wait
-        if(mozi_capture_)mozi_capture_->event("recovery_wait", "configured_one_second");
-        usleep(1000000 * RECOVERY_WAIT_SECS);
-
-        // Attempt recovery
-        try {
-          if(mozi_capture_)mozi_capture_->event("recovery_begin");
-          robot_ptr_->automaticErrorRecovery();
-          if(mozi_capture_)mozi_capture_->event("recovery_success");
-          spdlog::warn("Robot operation recovered.");
-          is_robot_operational = true;
-          break;
-
-        } catch (const std::exception &ex) {
-          if(mozi_capture_)mozi_capture_->event("recovery_failed",ex.what(),true);
-          spdlog::error("Recovery failed: {}", ex.what());
+        spdlog::error("Robot is unable to be controlled: {}",ex.what());
+        if(tracking_path_!=0 || torque_command_.native_tracking().record_id()) {
+          tracking_path_=4;
+          tracking_tape_->select(0);
+          // Stay stopped and preserve a latched failure. Do not repeatedly retry a failed read.
+          try {
+            robot_ptr_->read([&](const franka::RobotState& state) {
+              updateServerCommand(state,torque_commanded_);return true;
+            });
+          } catch(const std::exception& read_error) {
+            spdlog::error("Latched native experiment fault: {}",read_error.what());
+            for(;;)std::this_thread::sleep_for(std::chrono::seconds(1));
+          }
+        } else {
+          bool recovered=false;
+          for(int i=0;i<RECOVERY_MAX_TRIES;++i) {
+            usleep(1000000*RECOVERY_WAIT_SECS);
+            try{robot_ptr_->automaticErrorRecovery();recovered=true;break;}
+            catch(const std::exception& recovery){spdlog::error("Recovery failed: {}",recovery.what());}
+          }
+          if(!recovered)return;
         }
       }
     }
@@ -371,6 +442,31 @@ void FrankaTorqueControlClient::updateServerCommand(
     // now
     robot_state_.set_error_code(bool(libfranka_robot_state.current_errors));
   }
+  const auto& native=libfranka_robot_state;
+  ++native_cycle_;
+  robot_state_.set_native_state_valid(!mock_franka_);
+  robot_state_.set_prev_command_successful_valid(false);
+  robot_state_.set_robot_time_ms(native.time.toMSec());
+  robot_state_.set_state_receive_monotonic_ns(mozi::mono_ns());
+  robot_state_.set_control_command_success_rate(native.control_command_success_rate);
+  robot_state_.set_tracking_control_path(tracking_path_);
+  robot_state_.set_native_cycle(native_cycle_);
+  robot_state_.set_tracking_log_ready_id(tracking_tape_->ready());
+  robot_state_.set_tracking_log_failed(tracking_tape_->failed());
+  robot_state_.set_tracking_phase(torque_command_.native_tracking().phase());
+  robot_state_.set_tracking_source_index(torque_command_.native_tracking().source_index());
+  robot_state_.set_tracking_record_id(torque_command_.native_tracking().record_id());
+  robot_state_.set_m_ee(native.m_ee);
+  robot_state_.set_m_load(native.m_load);
+  robot_state_.mutable_o_t_ee()->Assign(native.O_T_EE.begin(),native.O_T_EE.end());
+  robot_state_.mutable_f_t_ee()->Assign(native.F_T_EE.begin(),native.F_T_EE.end());
+  robot_state_.mutable_native_q_d()->Assign(native.q_d.begin(),native.q_d.end());
+  robot_state_.mutable_native_dq_d()->Assign(native.dq_d.begin(),native.dq_d.end());
+  robot_state_.mutable_o_t_ee_d()->Assign(native.O_T_EE_d.begin(),native.O_T_EE_d.end());
+  robot_state_.mutable_o_t_ee_c()->Assign(native.O_T_EE_c.begin(),native.O_T_EE_c.end());
+  robot_state_.mutable_ee_t_k()->Assign(native.EE_T_K.begin(),native.EE_T_K.end());
+  robot_state_.mutable_f_x_cee()->Assign(native.F_x_Cee.begin(),native.F_x_Cee.end());
+  robot_state_.mutable_f_x_cload()->Assign(native.F_x_Cload.begin(),native.F_x_Cload.end());
   setTimestampToNow(robot_state_.mutable_timestamp());
 
   // Retrieve torques
@@ -386,12 +482,48 @@ void FrankaTorqueControlClient::updateServerCommand(
   robot_state_.set_prev_controller_latency_ms(
       float(post_update_ns - pre_update_ns) / 1e6);
 
+  auto record_id=torque_command_.native_tracking().record_id();
+  tracking_tape_->select(tracking_path_==4?0:record_id);
+  if(record_id && tracking_tape_->failed())throw std::runtime_error("Tracking recorder failed; experiment aborted");
   assert(torque_command_.joint_torques_size() == NUM_DOFS);
   for (int i = 0; i < NUM_DOFS; i++) {
     torque_out[i] = torque_command_.joint_torques(i);
     robot_state_.set_prev_joint_torques_computed(
         i, torque_command_.joint_torques(i));
   }
+}
+
+void FrankaTorqueControlClient::recordTracking(const franka::RobotState& s,
+    const std::array<double,16>& pose) {
+  const auto& command=torque_command_.native_tracking();
+  if(!command.record_id() || tracking_tape_->ready()!=command.record_id())return;
+  mozi::TrackingRow row;
+  const uint64_t source_wall=uint64_t(robot_state_.timestamp().seconds())*1000000000ULL+robot_state_.timestamp().nanos();
+  row.time={source_wall,robot_state_.state_receive_monotonic_ns(),s.time.toMSec(),native_cycle_,command.record_id(),
+            tracking_path_,command.phase(),previous_command_robot_ms_,mozi_error_mask(s.current_errors),
+            mozi_error_mask(s.last_motion_errors),static_cast<uint64_t>(s.robot_mode)};
+  size_t at=0;
+  auto one=[&](double value){row.data[at++]=value;};
+  auto array=[&](const auto& values){for(double value:values)one(value);};
+  auto trace=[&](const auto& values){
+    for(int i=0;i<7;++i)one(values.size()==7 && tracking_path_!=2?values[i]:std::numeric_limits<double>::quiet_NaN());
+  };
+  one(command.source_index());one(previous_source_index_);one(command.prelude_blend());one(s.control_command_success_rate);
+  array(s.q);array(s.dq);array(s.q_d);array(s.dq_d);
+  trace(torque_command_.tracking_q_ref());trace(torque_command_.tracking_dq_ref());trace(torque_command_.tracking_feedforward());
+  if(tracking_path_==2) {
+    for(int i=0;i<21;++i)one(std::numeric_limits<double>::quiet_NaN());
+  } else {array(torque_commanded_);array(torque_safety_);array(torque_applied_);}
+  array(s.tau_J);array(s.tau_J_d);array(s.tau_ext_hat_filtered);
+  array(s.O_T_EE);array(s.F_T_EE);array(s.EE_T_K);array(s.O_T_EE_d);array(s.O_T_EE_c);array(pose);
+  for(int i=0;i<6;++i)one(command.stiffness_size()==6?command.stiffness(i):std::numeric_limits<double>::quiet_NaN());
+  one(s.m_ee);one(s.m_load);array(s.F_x_Cee);array(s.F_x_Cload);
+  one(torque_command_.tracking_policy_path());one(torque_command_.tracking_valid()?1.:0.);
+  one(robot_state_.prev_controller_latency_ms());
+  one((int64_t(torque_command_.timestamp().seconds())*1000000000LL+torque_command_.timestamp().nanos()-int64_t(source_wall))/1000.);
+  assert(at==row.data.size());
+  tracking_tape_->record(row);
+  previous_source_index_=command.source_index();previous_command_robot_ms_=s.time.toMSec();
 }
 
 void FrankaTorqueControlClient::checkStateLimits(

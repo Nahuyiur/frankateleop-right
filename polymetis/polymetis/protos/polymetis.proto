@@ -133,12 +133,55 @@ message RobotState {
   float prev_controller_latency_ms = 10;                  //Latency of previous ControlUpdate call
   bool prev_command_successful = 11;                      //Whether previous command packet is successfully transmitted
   int32 error_code = 12;
+  // Existing deployed native-feedback wire contract. Keep these field IDs.
+  repeated double o_t_ee = 13;
+  repeated double f_t_ee = 14;
+  double control_command_success_rate = 15;
+  bool native_state_valid = 16;
+  uint64 robot_time_ms = 17;
+  uint64 state_receive_monotonic_ns = 18;
+  bool prev_command_successful_valid = 19;
+  // Same native sample; q_d/dq_d are meaningful as targets only in B/C.
+  repeated double native_q_d = 20;
+  repeated double native_dq_d = 21;
+  repeated double o_t_ee_d = 22;
+  repeated double o_t_ee_c = 23;
+  repeated double ee_t_k = 24;
+  uint32 tracking_control_path = 25; // 0=A, 1=B, 2=C; not inferred from q_d.
+  uint64 native_cycle = 26;
+  double m_ee = 27;
+  repeated double f_x_cee = 28;
+  double m_load = 29;
+  repeated double f_x_cload = 30;
+  uint64 tracking_log_ready_id = 31;
+  bool tracking_log_failed = 32;
+  uint32 tracking_phase = 33;
+  sint64 tracking_source_index = 34;
+  uint64 tracking_record_id = 35;
 }
 
 message TorqueCommand {
   // Contains the command sent to the robot.
   google.protobuf.Timestamp timestamp = 1;
   repeated float joint_torques = 2;
+  // Values actually evaluated by this policy forward, not a later RPC read.
+  repeated float tracking_q_ref = 3;
+  repeated float tracking_dq_ref = 4;
+  repeated float tracking_feedforward = 5;
+  bool tracking_valid = 6;
+  uint32 tracking_policy_path = 7;
+  NativeTrackingCommand native_tracking = 8;
+}
+
+message NativeTrackingCommand {
+  uint32 path = 1;
+  uint64 record_id = 2;
+  uint32 finish = 3; // 0 run, 1 intentional finish, 2 expired owner lease
+  uint32 phase = 4; // 0 waiting, 1 prelude, 2 trajectory, 3 endpoint hold
+  sint64 source_index = 5;
+  double prelude_blend = 6;
+  repeated double pose = 7; // O_T_EE, column-major, before libfranka processing
+  repeated double stiffness = 8;
 }
 
 message Empty {}

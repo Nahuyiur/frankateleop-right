@@ -169,15 +169,20 @@ def test_owned_rpc_configuration_and_restore():
     try:
         assert call('get_replay_capabilities')['tracking_impedance']==3
         assert call('get_replay_capabilities')['static_sampling']==1
-        for method in ['configure_tracking_static','freeze_tracking_target','get_tracking_static_sample']:
+        assert call('get_replay_capabilities')['native_tracking']==1
+        for method in ['configure_tracking_static','freeze_tracking_target','get_tracking_static_sample',
+                       'configure_tracking_record','configure_tracking_native','get_tracking_native','start_tracking_native','finish_tracking_native']:
             assert 'error' in call(method), 'Static requests must require the replay owner'
         assert 'error' in call('configure_tracking_impedance',gains=contract.BASELINE,reference=reference())
         assert call('reserve_replay',replay_token='owned')['ok']
+        assert 'error' in call('configure_tracking_record',record_id=123,replay_token='other')
+        assert call('configure_tracking_record',record_id=123,replay_token='owned')['record_id']==123
         assert 'error' in call('configure_tracking_impedance',gains=contract.BASELINE,replay_token='owned')
         result=call('configure_tracking_impedance',gains=contract.BASELINE,reference=reference(),velocity_mode=contract.DEFAULT_VELOCITY_MODE,replay_token='owned')
         assert result['reference']['count']==20 and result['velocity_reference']==contract.VELOCITY_REFERENCE
         assert call('set_replay_mode',mode='ee',replay_token='owned') is None
         assert call('get_tracking_impedance')['applied']['velocity_reference']==contract.VELOCITY_REFERENCE
+        assert 'error' in call('configure_tracking_record',record_id=456,replay_token='owned')
         assert 'error' in call('release_replay',replay_token='other')
         assert call('release_replay',replay_token='owned')['ok']
         assert call('get_tracking_impedance')['applied'] is None and r.robot.default_starts==1

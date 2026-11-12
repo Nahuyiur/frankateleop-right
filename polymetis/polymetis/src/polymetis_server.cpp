@@ -173,6 +173,12 @@ PolymetisControllerServerImpl::ControlUpdate(ServerContext *context,
                          robot_state->motor_torques_measured().end()),
       std::vector<float>(robot_state->motor_torques_external().begin(),
                          robot_state->motor_torques_external().end()));
+  if(robot_state->native_state_valid()) {
+    torch_robot_state_->update_native(
+        std::vector<float>(robot_state->native_q_d().begin(),robot_state->native_q_d().end()),
+        std::vector<float>(robot_state->native_dq_d().begin(),robot_state->native_dq_d().end()),
+        robot_state->tracking_control_path(),robot_state->robot_time_ms());
+  }
 
   // Lock to prevent 1) controller updates while controller is running; 2)
   // external termination during controller selection, which might cause loading
@@ -208,6 +214,28 @@ PolymetisControllerServerImpl::ControlUpdate(ServerContext *context,
   std::vector<float> desired_torque;
   try {
     desired_torque = controller->forward(*torch_robot_state_);
+    const auto& trace=controller->tracking_trace;
+    if(custom_controller_context_.status==RUNNING && trace.size()==22) {
+      for(int i=0;i<7;++i) {
+        torque_command->add_tracking_q_ref(trace[i]);
+        torque_command->add_tracking_dq_ref(trace[7+i]);
+        torque_command->add_tracking_feedforward(trace[14+i]);
+      }
+      torque_command->set_tracking_valid(true);
+      torque_command->set_tracking_policy_path(static_cast<unsigned>(trace[21]));
+    }
+    const auto& native=controller->native_command;
+    if(custom_controller_context_.status==RUNNING && native.size()==28) {
+      auto* command=torque_command->mutable_native_tracking();
+      command->set_path(static_cast<unsigned>(native[0]));
+      command->set_record_id(static_cast<uint64_t>(native[1]));
+      command->set_finish(static_cast<unsigned>(native[2]));
+      command->set_source_index(static_cast<int64_t>(native[3]));
+      command->set_prelude_blend(native[4]);
+      for(int i=0;i<6;++i)command->add_stiffness(native[5+i]);
+      for(int i=0;i<16;++i)command->add_pose(native[11+i]);
+      command->set_phase(static_cast<unsigned>(native[27]));
+    }
     // This is the first successful forward using the parameter revision,
     // recorded under the SAME pre-existing mutex as parameter updates.
     if(custom_controller_context_.status==RUNNING && mozi_first_revision_!=mozi_revision_) {
