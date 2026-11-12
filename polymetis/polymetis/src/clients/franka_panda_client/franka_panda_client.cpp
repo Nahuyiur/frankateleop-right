@@ -300,6 +300,13 @@ void FrankaTorqueControlClient::run() {
       for(int i=0;i<16;++i)desired[i]=command.pose(i);
       auto pose=mozi::native_reference(native_initial_pose_,desired,command.prelude_blend(),command.phase());
       recordTracking(state,pose);
+      // Native desired and measured poses are from this same FCI cycle. This
+      // experimental abort bound does not replace physical workspace clearance.
+      try {mozi::check_native_tracking(state.O_T_EE,state.O_T_EE_d,state.F_T_EE);}
+      catch(...) {
+        if(mozi_capture_)mozi_capture_->record(mozi_state_sample(state));
+        throw;
+      }
       if(command.finish()==1)return franka::MotionFinished(franka::CartesianPose(pose));
       return franka::CartesianPose(pose);
     };

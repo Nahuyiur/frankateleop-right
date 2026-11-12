@@ -4,6 +4,7 @@
 #include <cassert>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 
 template<class F>void rejects(F fn){bool failed=false;try{fn();}catch(const std::exception&){failed=true;}assert(failed);}
 int main() {
@@ -24,6 +25,23 @@ int main() {
   rejects([]{mozi::native_route(1,1,1,true,124,123,0);});
   rejects([]{mozi::native_route(1,1,0,true,123,123,0);});
   rejects([]{mozi::native_route(1,1,1,false,123,123,0);});
+  mozi::check_native_tracking(identity,identity,identity);
+  auto measured=identity;measured[12]=.0149;
+  mozi::check_native_tracking(measured,identity,identity);
+  measured[12]=.0151;
+  rejects([&]{mozi::check_native_tracking(measured,identity,identity);});
+  Eigen::Map<Eigen::Matrix4d> matrix(measured.data());
+  matrix.setIdentity();matrix.block<3,3>(0,0)=Eigen::AngleAxisd(.08,Eigen::Vector3d::UnitY()).toRotationMatrix();
+  mozi::check_native_tracking(measured,identity,identity);
+  matrix.block<3,3>(0,0)=Eigen::AngleAxisd(.09,Eigen::Vector3d::UnitY()).toRotationMatrix();
+  rejects([&]{mozi::check_native_tracking(measured,identity,identity);});
+  matrix.block<3,3>(0,0)=Eigen::AngleAxisd(.086,Eigen::Vector3d::UnitY()).toRotationMatrix();
+  auto tcp=identity;tcp[14]=.19;
+  // EE positions coincide and orientation is below 5 degrees, but the flange
+  // moves beyond 15 mm due to the TCP lever arm. An EE-only guard would miss it.
+  rejects([&]{mozi::check_native_tracking(measured,identity,tcp);});
+  measured[12]=std::numeric_limits<double>::quiet_NaN();
+  rejects([&]{mozi::check_native_tracking(measured,identity,identity);});
   std::string directory="/tmp/mozi-native-test-"+std::to_string(getpid());
   {
     auto tape=std::make_unique<mozi::TrackingTape>(directory);
@@ -41,5 +59,5 @@ int main() {
     assert(tape->failed() && tape->ready()==0);
   }
   std::filesystem::remove_all(directory);
-  std::cout<<"PASS native prelude transforms, immutable mode/record ownership, cancel/expiry, bounded recorder flush and collision refusal\n";
+  std::cout<<"PASS native transforms, same-cycle flange deviation guard, mode ownership, cancel/expiry, recorder flush and collision refusal\n";
 }
