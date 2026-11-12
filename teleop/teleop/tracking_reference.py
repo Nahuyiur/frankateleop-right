@@ -5,7 +5,7 @@ from scipy.interpolate import CubicSpline
 from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.transform import Rotation
 
-VERSION='native-reference-25ms-v1'
+VERSION='native-reference-50ms-v1'
 LIMITS=dict(translation_velocity=2.4,translation_acceleration=7.2,translation_jerk=3600.,
             rotation_velocity=2.,rotation_acceleration=13.6,rotation_jerk=6800.)
 
@@ -58,7 +58,7 @@ def build(reference,start_ns,end_ns,tool,speed=1.):
     source_grid=np.linspace(0,duration,round(duration*1000)+1)
     raw_curve=CubicSpline(t,np.c_[raw[:,:3],rv],bc_type=((1,np.zeros(6)),(1,np.zeros(6))))
     source_values=raw_curve(np.clip(source_grid,t[0],t[-1]))
-    smooth=gaussian_filter1d(source_values,25.,axis=0,mode='nearest')
+    smooth=gaussian_filter1d(source_values,50.,axis=0,mode='nearest')
     # Preserve exact endpoints and join the stationary prelude/endpoint hold with
     # zero first and second derivatives. No causal delay is introduced here.
     for reverse in (False,True):
@@ -83,7 +83,7 @@ def build(reference,start_ns,end_ns,tool,speed=1.):
     metadata=dict(version=VERSION,speed=speed,sample_period_s=.001,duration_s=float(output_t[-1]),
                   source_sha256=reference['sha256'],processed_sha256=hashlib.sha256(poses.tobytes()).hexdigest(),
                   limits=LIMITS,peaks=peaks,processing_deviation=deviation,F_T_EE=list(tool),
-                  smoothing='zero-phase Gaussian sigma 25 ms in original time; 200 ms C2 endpoint join',
+                  smoothing='zero-phase Gaussian sigma 50 ms in original time; 200 ms C2 endpoint join',
                   native_processing='libfranka 100 Hz lowpass + rate limiter; actual O_T_EE_c recorded separately')
     flange_poses=np.c_[flange[:,:3,3],actual_rot.as_quat()]
     return poses,flange_poses,metadata
