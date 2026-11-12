@@ -109,6 +109,22 @@ def test_latched_fault_finish_does_not_mutate_policy(monkeypatch):
     assert not updates
 
 
+def test_c_requires_flange_frame_but_stopped_handoff_accepts_restoration():
+    from types import SimpleNamespace
+    import numpy as np
+    import pytest
+    from teleop.tracking_native import observed
+    tool=np.eye(4);tool[:3,3]=[.044,0,.19]
+    state=dict(path=2,log_failed=False,EE_T_K=np.eye(4).T.ravel().tolist())
+    raw=dict(native_state_valid=True,state_timestamp_ns=time.time_ns(),native_F_T_EE=tool.T.ravel().tolist(),tracking_native=state)
+    robot=SimpleNamespace(get_feedback_observations=lambda **_:raw)
+    with pytest.raises(RuntimeError,match='not the flange'):observed(robot)
+    state['EE_T_K']=np.linalg.inv(tool).T.ravel().tolist()
+    assert observed(robot)[1]['path']==2
+    state.update(path=3,EE_T_K=np.eye(4).T.ravel().tolist())
+    assert observed(robot)[1]['path']==3
+
+
 if __name__=='__main__':
     for name,fn in list(globals().items()):
         if name.startswith('test_') and not fn.__code__.co_argcount:fn();print('PASS',name)

@@ -302,7 +302,10 @@ void FrankaTorqueControlClient::run() {
       recordTracking(state,pose);
       // Native desired and measured poses are from this same FCI cycle. This
       // experimental abort bound does not replace physical workspace clearance.
-      try {mozi::check_native_tracking(state.O_T_EE,state.O_T_EE_d,state.F_T_EE);}
+      try {
+        if(tracking_path_==2)mozi::check_flange_stiffness(state.F_T_EE,state.EE_T_K);
+        mozi::check_native_tracking(state.O_T_EE,state.O_T_EE_d,state.F_T_EE);
+      }
       catch(...) {
         if(mozi_capture_)mozi_capture_->record(mozi_state_sample(state));
         throw;
@@ -345,7 +348,10 @@ void FrankaTorqueControlClient::run() {
                 throw std::runtime_error("Cartesian stiffness outside experiment bounds");
             }
             robot_ptr_->setCartesianImpedance(values);
-            robot_ptr_->control(pose_callback,franka::ControllerMode::kCartesianImpedance,limit_rate_,lpf_cutoff_freq_);
+            mozi::with_flange_stiffness(
+                [&]{return robot_ptr_->readOnce();},
+                [&](const std::array<double,16>& frame){robot_ptr_->setK(frame);},
+                [&]{robot_ptr_->control(pose_callback,franka::ControllerMode::kCartesianImpedance,limit_rate_,lpf_cutoff_freq_);});
           }
           tracking_path_=3;
         }

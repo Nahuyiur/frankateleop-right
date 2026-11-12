@@ -21,6 +21,11 @@ def observed(robot):
     state=raw.get('tracking_native')
     if not isinstance(state,dict):raise RuntimeError('Native C++ feedback upgrade is not active')
     if state['log_failed'] or state['path']==4:raise RuntimeError('Latched native experiment/recorder fault; manual recovery required')
+    if state['path']==2:
+        tool=np.asarray(raw['native_F_T_EE']).reshape(4,4,order='F')
+        frame=np.asarray(state['EE_T_K']).reshape(4,4,order='F')
+        if not np.allclose(tool@frame,np.eye(4),atol=1e-6,rtol=0):
+            raise RuntimeError('Native C stiffness frame readback is not the flange')
     return raw,state
 
 
@@ -87,6 +92,12 @@ def configure(robot, artifact, sha256, path, record_id, stiffness):
         velocity_formula='dq_ref = native dq_d from the same RobotState' if path=='B' else 'Franka internal motion generator; no independent KD interface',
         initial_native=copy.deepcopy(state),F_T_EE=list(raw['native_F_T_EE']),
         gripper_width_m=float(raw['gripper_width'][0]),configured_ns=time.time_ns())
+    if path=='C':
+        record['stiffness_frame']=dict(mode='flange',version='C-flange-K-v1',
+            before_EE_T_K=list(state['EE_T_K']),
+            requested_EE_T_K=np.linalg.inv(np.asarray(raw['native_F_T_EE']).reshape(4,4,order='F')).T.reshape(16).tolist(),
+            verification='native readback before motion and on every C cycle; F_T_EE @ EE_T_K = I',
+            exit='restore previous EE_T_K on normal completion and control exception')
     robot._tracking_native=record
     robot._tracking_impedance_applied=dict(record,applied_ns=time.time_ns(),hz=1000,reference=metadata)
     return copy.deepcopy(record)

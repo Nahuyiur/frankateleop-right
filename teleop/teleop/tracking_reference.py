@@ -7,7 +7,7 @@ from scipy.spatial.transform import Rotation
 
 VERSION='native-reference-50ms-v1'
 PROBE_VERSION='native-short-probe-v1'
-GUARDED_C_CLIENT_SHA256='3ea6032106db7160cdca38e68f61a839117d62a19c5bc2f62d97e5444839d91b'
+GUARDED_C_CLIENT_SHA256='ac6d429aca03d2d77a69f00fb1bccaf35198790914364b9ae4347f5943250dab'
 GUARDED_C_REFERENCES=frozenset((
     '0e457b6fae976de9e15a63397006bc7a1447cbb7231ca1ed14e38d99666155ba',
     'ba2cad3eaf736dc8f50a90a3d77ca8947ce3b77d20517f279a888029212c1637'))
