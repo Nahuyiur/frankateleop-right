@@ -126,7 +126,7 @@ FrankaTorqueControlClient::FrankaTorqueControlClient(
     }catch(const std::exception& ex){spdlog::warn("Native diagnostic capture unavailable: {}",ex.what());}
   }
 
-  tracking_tape_=std::make_unique<mozi::TrackingTape>("/home/pnp/frankateleop/logs/tracking_native");
+  tracking_tape_=std::make_unique<mozi::TrackingTape>("/home/pnp/work/rtc-abc-recordings");
 
   // Connect to robot
   mock_franka_ = config["mock"].as<bool>();
