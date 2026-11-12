@@ -10,6 +10,14 @@ LIMITS=dict(translation_velocity=2.4,translation_acceleration=7.2,translation_je
             rotation_velocity=2.,rotation_acceleration=13.6,rotation_jerk=6800.)
 
 
+def check_native_mode(path,poses):
+    # Run 22 contacted the table. Keep dynamic C disabled at the backend too,
+    # including callers which bypass the console's mode selector.
+    a=np.asarray(poses)
+    if path=='C' and not np.array_equal(a,np.broadcast_to(a[0],a.shape)):
+        raise ValueError('Dynamic C disabled after run 22 table collision; independent validation required')
+
+
 def matrix(values):
     a=np.asarray(values,dtype=float).reshape(4,4,order='F')
     if (not np.isfinite(a).all() or not np.allclose(a[3],[0,0,0,1],atol=1e-8)

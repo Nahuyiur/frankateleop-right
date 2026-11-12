@@ -33,7 +33,7 @@ def active(robot):
 
 
 def configure(robot, artifact, sha256, path, record_id, stiffness):
-    from teleop.tracking_reference import check
+    from teleop.tracking_reference import check,check_native_mode
     from teleop.tracking_policy import NativeTrackingHybridJointImpedanceControl
     from teleop.tracking_impedance import snapshot
     if getattr(robot,'_tracking_native',None):raise RuntimeError('Native experiment already configured')
@@ -47,6 +47,7 @@ def configure(robot, artifact, sha256, path, record_id, stiffness):
         poses=stored['poses'].copy()
         metadata=json.loads(str(stored['metadata'].item()))
     peaks=check(poses)
+    check_native_mode(path,poses)
     if hashlib.sha256(poses.astype('<f8').tobytes()).hexdigest()!=metadata['processed_sha256']:
         raise ValueError('Processed reference checksum mismatch')
     raw,state=observed(robot)
@@ -98,7 +99,8 @@ def status(robot, heartbeat=True):
     width=raw.get('gripper_width',())
     if (raw.get('gripper_width_source')!='measured' or len(width)!=1 or not np.isfinite(width[0])
             or abs(width[0]-record['gripper_width_m'])>.001):
-        raise RuntimeError('Fixed measured gripper opening changed or became unavailable')
+        raise RuntimeError('Fixed measured gripper opening changed or became unavailable: source=%s, error=%s, detail=%s' % (
+            raw.get('gripper_width_source'),raw.get('gripper_error_code'),raw.get('gripper_observation_error','')))
     from teleop.tracking_static import fk
     return dict(state,source_ns=raw['state_timestamp_ns'],q=list(raw['joint_positions']),
                 dq=list(raw['joint_velocities']),eef=[float(v) for v in raw['ee_pos_quat']],
