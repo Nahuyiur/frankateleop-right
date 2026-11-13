@@ -1,0 +1,462 @@
+{
+  "selected_best_by": "user",
+  "decision": "在同一 0.5× / 50 ms 平滑参考和 08 增益下，B 路径（Franka 原生运动生成器 q_d/dq_d + 外部混合关节阻抗）跟踪效果最好，作为当前采用形式。C（Franka 内部笛卡尔阻抗）不再考虑。",
+  "recorded_at": "2026-11-13",
+  "best": {
+    "sequence": 29,
+    "run_id": "web-20261113-210919-181298cbeed3",
+    "label": "29-ABC-B-0.5x-50ms-m_ee0.65-08参数",
+    "status": "completed",
+    "comparable": true,
+    "config": {
+      "gains": {
+        "left": {
+          "Kq": [
+            50.0,
+            40.0,
+            60.0,
+            30.0,
+            40.0,
+            30.0,
+            15.0
+          ],
+          "Kqd": [
+            4.0,
+            6.0,
+            5.0,
+            5.0,
+            3.0,
+            2.0,
+            1.0
+          ],
+          "Kx": [
+            900.0,
+            900.0,
+            900.0,
+            20.0,
+            20.0,
+            20.0
+          ],
+          "Kxd": [
+            40.0,
+            40.0,
+            40.0,
+            3.0,
+            3.0,
+            3.0
+          ]
+        },
+        "right": {
+          "Kq": [
+            50.0,
+            40.0,
+            60.0,
+            30.0,
+            40.0,
+            30.0,
+            15.0
+          ],
+          "Kqd": [
+            4.0,
+            6.0,
+            5.0,
+            5.0,
+            3.0,
+            2.0,
+            1.0
+          ],
+          "Kx": [
+            900.0,
+            900.0,
+            900.0,
+            20.0,
+            20.0,
+            20.0
+          ],
+          "Kxd": [
+            40.0,
+            40.0,
+            40.0,
+            3.0,
+            3.0,
+            3.0
+          ]
+        }
+      },
+      "velocity_mode": "validated_trajectory_joint_difference",
+      "native": {
+        "path": "B",
+        "test": "dynamic",
+        "speed": 0.5,
+        "point_percent": 10,
+        "mounting_note": "倾角实测 44.85°（接近名义 45°），未修改 RPY"
+      },
+      "notes": "与第 21 次配对的单因素复测：唯一变化为 Desk 末端质量 m_ee 0.591→0.65 kg（考虑线缆等附加质量；F_x_Cee 未改，m_load=0）。倾角仪实测底座倾角 44.85°，安装 RPY 未修改。08 实际增益；共同 0.5× 时间轴（正式轨迹 40.688 s）、50 ms 平滑与端点处理、3 s 接入、100 Hz 低通、原限速和保护阈值均与 21 次相同。genrobot-base、空载无接触、夹爪固定约 89.98 mm。运行前因 11/13 01:11 两臂 libfranka UDP 超时锁定，已重启 mozi-backend/mozi-ros（teleop 模式）并只读核验状态。"
+    },
+    "tracking": {
+      "left": {
+        "position_mm": {
+          "rmse": 4.328352890914196,
+          "p95": 6.278870623121184,
+          "max": 7.290714640434385
+        },
+        "orientation_deg": {
+          "rmse": 1.1691223678848148,
+          "p95": 1.8380175050319467,
+          "max": 2.838335142406038
+        },
+        "processed_reference_error": {
+          "position_mm": {
+            "rmse": 4.29520499772038,
+            "p95": 6.3030261838484325,
+            "max": 7.176584541936764
+          },
+          "orientation_deg": {
+            "rmse": 1.1339209215264432,
+            "p95": 1.780169833684731,
+            "max": 2.115637198001665
+          }
+        },
+        "native_desired_to_actual": {
+          "position_mm": {
+            "rmse": 4.24798974904912,
+            "p95": 6.220475351320422,
+            "max": 7.052290765622681
+          },
+          "orientation_deg": {
+            "rmse": 1.1221892565484117,
+            "p95": 1.7714220020595097,
+            "max": 2.0731545103265367
+          },
+          "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+        },
+        "fitted_lag_ms": 52.39,
+        "coverage_ok": true,
+        "samples": 40689
+      },
+      "right": {
+        "position_mm": {
+          "rmse": 4.03019267633092,
+          "p95": 5.646648577646367,
+          "max": 6.951249399346446
+        },
+        "orientation_deg": {
+          "rmse": 1.2264442595319962,
+          "p95": 1.8281047746395933,
+          "max": 3.312932111804985
+        },
+        "processed_reference_error": {
+          "position_mm": {
+            "rmse": 3.9985750765197534,
+            "p95": 5.595845205258357,
+            "max": 7.478392429867823
+          },
+          "orientation_deg": {
+            "rmse": 1.180476931342903,
+            "p95": 1.7154282863818138,
+            "max": 2.0971656993016627
+          }
+        },
+        "native_desired_to_actual": {
+          "position_mm": {
+            "rmse": 3.970479558048231,
+            "p95": 5.5397666498364035,
+            "max": 7.30555892206218
+          },
+          "orientation_deg": {
+            "rmse": 1.1694495294819744,
+            "p95": 1.7043987373600324,
+            "max": 2.0780369510752483
+          },
+          "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+        },
+        "fitted_lag_ms": 40.85,
+        "coverage_ok": true,
+        "samples": 40689
+      }
+    }
+  },
+  "same_parameter_comparison": {
+    "A20": {
+      "sequence": 20,
+      "run_id": "web-20261112-200256-b39e94aff814",
+      "label": "20-ABC-A-0.5x-50ms-第1轮-08参数",
+      "tracking": {
+        "left": {
+          "position_mm": {
+            "rmse": 5.098845352623487,
+            "p95": 8.033894731530342,
+            "max": 10.319422693551333
+          },
+          "orientation_deg": {
+            "rmse": 1.5404866970364768,
+            "p95": 2.599796733593813,
+            "max": 3.492235854939412
+          },
+          "processed_reference_error": {
+            "position_mm": {
+              "rmse": 5.079062308920439,
+              "p95": 8.01191265050243,
+              "max": 10.43335746831965
+            },
+            "orientation_deg": {
+              "rmse": 1.513990461653126,
+              "p95": 2.524769276573441,
+              "max": 3.072284825043091
+            }
+          },
+          "native_desired_to_actual": null,
+          "fitted_lag_ms": 69.55,
+          "coverage_ok": true,
+          "samples": 40685
+        },
+        "right": {
+          "position_mm": {
+            "rmse": 4.418786305374786,
+            "p95": 6.465585416078906,
+            "max": 9.388420895340756
+          },
+          "orientation_deg": {
+            "rmse": 1.6007891108155974,
+            "p95": 2.4511597801120866,
+            "max": 5.618058328423078
+          },
+          "processed_reference_error": {
+            "position_mm": {
+              "rmse": 4.394506476333333,
+              "p95": 6.329704946871393,
+              "max": 9.713489695040444
+            },
+            "orientation_deg": {
+              "rmse": 1.5588327422998416,
+              "p95": 2.3554250199908053,
+              "max": 3.7032234267369137
+            }
+          },
+          "native_desired_to_actual": null,
+          "fitted_lag_ms": 59.68,
+          "coverage_ok": true,
+          "samples": 40683
+        }
+      }
+    },
+    "B21": {
+      "sequence": 21,
+      "run_id": "web-20261112-200438-bb5cc35b03bc",
+      "label": "21-ABC-B-0.5x-50ms-第1轮-08参数",
+      "tracking": {
+        "left": {
+          "position_mm": {
+            "rmse": 4.450473456448063,
+            "p95": 6.219436240851547,
+            "max": 7.638912770424038
+          },
+          "orientation_deg": {
+            "rmse": 1.142258919859985,
+            "p95": 1.8446206474651223,
+            "max": 2.815476751523319
+          },
+          "processed_reference_error": {
+            "position_mm": {
+              "rmse": 4.421048257541011,
+              "p95": 6.137983726922909,
+              "max": 7.56760078973325
+            },
+            "orientation_deg": {
+              "rmse": 1.1077423562613404,
+              "p95": 1.8045311511912767,
+              "max": 2.073704050127251
+            }
+          },
+          "native_desired_to_actual": {
+            "position_mm": {
+              "rmse": 4.378455996786133,
+              "p95": 6.057023923755117,
+              "max": 7.41394600971224
+            },
+            "orientation_deg": {
+              "rmse": 1.0954917076086967,
+              "p95": 1.7812063085525645,
+              "max": 2.028013483488037
+            },
+            "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+          },
+          "fitted_lag_ms": 51.67,
+          "coverage_ok": true,
+          "samples": 40689
+        },
+        "right": {
+          "position_mm": {
+            "rmse": 4.05712951486634,
+            "p95": 5.732872782514271,
+            "max": 7.186535944624326
+          },
+          "orientation_deg": {
+            "rmse": 1.1987690454667292,
+            "p95": 1.7965518317027769,
+            "max": 3.3053128373173113
+          },
+          "processed_reference_error": {
+            "position_mm": {
+              "rmse": 4.020404533774617,
+              "p95": 5.750538226266749,
+              "max": 7.866750264663887
+            },
+            "orientation_deg": {
+              "rmse": 1.1538172325913376,
+              "p95": 1.6938654465543974,
+              "max": 2.0802565244831577
+            }
+          },
+          "native_desired_to_actual": {
+            "position_mm": {
+              "rmse": 3.9934414027955607,
+              "p95": 5.67740775209956,
+              "max": 7.690781238513905
+            },
+            "orientation_deg": {
+              "rmse": 1.1426061249630213,
+              "p95": 1.6809820504620827,
+              "max": 2.0610029893041104
+            },
+            "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+          },
+          "fitted_lag_ms": 39.84,
+          "coverage_ok": true,
+          "samples": 40689
+        }
+      }
+    },
+    "B29": {
+      "sequence": 29,
+      "run_id": "web-20261113-210919-181298cbeed3",
+      "label": "29-ABC-B-0.5x-50ms-m_ee0.65-08参数",
+      "tracking": {
+        "left": {
+          "position_mm": {
+            "rmse": 4.328352890914196,
+            "p95": 6.278870623121184,
+            "max": 7.290714640434385
+          },
+          "orientation_deg": {
+            "rmse": 1.1691223678848148,
+            "p95": 1.8380175050319467,
+            "max": 2.838335142406038
+          },
+          "processed_reference_error": {
+            "position_mm": {
+              "rmse": 4.29520499772038,
+              "p95": 6.3030261838484325,
+              "max": 7.176584541936764
+            },
+            "orientation_deg": {
+              "rmse": 1.1339209215264432,
+              "p95": 1.780169833684731,
+              "max": 2.115637198001665
+            }
+          },
+          "native_desired_to_actual": {
+            "position_mm": {
+              "rmse": 4.24798974904912,
+              "p95": 6.220475351320422,
+              "max": 7.052290765622681
+            },
+            "orientation_deg": {
+              "rmse": 1.1221892565484117,
+              "p95": 1.7714220020595097,
+              "max": 2.0731545103265367
+            },
+            "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+          },
+          "fitted_lag_ms": 52.39,
+          "coverage_ok": true,
+          "samples": 40689
+        },
+        "right": {
+          "position_mm": {
+            "rmse": 4.03019267633092,
+            "p95": 5.646648577646367,
+            "max": 6.951249399346446
+          },
+          "orientation_deg": {
+            "rmse": 1.2264442595319962,
+            "p95": 1.8281047746395933,
+            "max": 3.312932111804985
+          },
+          "processed_reference_error": {
+            "position_mm": {
+              "rmse": 3.9985750765197534,
+              "p95": 5.595845205258357,
+              "max": 7.478392429867823
+            },
+            "orientation_deg": {
+              "rmse": 1.180476931342903,
+              "p95": 1.7154282863818138,
+              "max": 2.0971656993016627
+            }
+          },
+          "native_desired_to_actual": {
+            "position_mm": {
+              "rmse": 3.970479558048231,
+              "p95": 5.5397666498364035,
+              "max": 7.30555892206218
+            },
+            "orientation_deg": {
+              "rmse": 1.1694495294819744,
+              "p95": 1.7043987373600324,
+              "max": 2.0780369510752483
+            },
+            "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+          },
+          "fitted_lag_ms": 40.85,
+          "coverage_ok": true,
+          "samples": 40689
+        }
+      }
+    }
+  },
+  "findings": [
+    "同参数下 B21 相对 A20：位置 RMSE 左/右 -13%/-8%，位置最大值 -26%/-23%，姿态 RMSE -26%/-25%，拟合滞后少约 18～20 ms。",
+    "B29 只把 Desk m_ee 从 0.591 改为 0.65 kg（倾角实测 44.85°，RPY 未改）：起点静态误差左/右 4.71→3.98 mm、4.80→3.71 mm；全程位置 RMSE 仅下降 1%～3%，属于单次实验波动范围。",
+    "B 的主要误差是准静态偏置：同周期 native 目标→实测误差可由 tau_ext 换算的 2.5～3.5 N 法兰外力线性解释，扣除后残差约 1.5～1.7 mm；再扣除目标速度项后约 1.2～1.3 mm（等效滞后约 22～31 ms）。",
+    "C 在正式轨迹 t≈2.5 s 起步即沿固定方向发散，误差沿该方向的二阶拟合显示刚度约符合 900 N/m 而等效阻尼为负（约 -20～-40 1/s）；FK(q_d) 与 O_T_EE_d 一致，接入/坐标层面已排除，固件机理未确认。",
+    "每条路径只有 1～2 次完整有效结果，A/B 差距中低于约 10% 的部分仍需重复实验确认。"
+  ],
+  "tracking_improvement_plan": [
+    {
+      "priority": 0,
+      "item": "重复基线",
+      "detail": "B29 配置再跑 2 次（可与 A 交替），得到 B 的实验间波动，之后每项改动都与该波动比较。"
+    },
+    {
+      "priority": 1,
+      "item": "准静态外力偏置补偿",
+      "detail": "在 B 的外部力矩中加入 J^T·F_hat，F_hat 为 tau_ext 换算法兰外力的慢速低通（秒级）并限幅；仅空载无接触时启用。离线预计位置 RMSE 约 4 mm→1.5～2 mm。"
+    },
+    {
+      "priority": 2,
+      "item": "末端负载/质心辨识",
+      "detail": "B29 显示单改质量几乎不改变外力，偏置随姿态变化；用多姿态静态采样拟合 m_ee 与 F_x_Cee（必要时含线缆等效力），从模型层面减小偏置。"
+    },
+    {
+      "priority": 3,
+      "item": "提高平移刚度 Kx",
+      "detail": "静态偏置约为 F/k，等效 k≈600～730 N/m。Kx 900→1200→1500，按 sqrt(k) 同步提高 Kxd（40→46→52）；先 10% 点静态，再短程，再全程；15 mm 保护不变。"
+    },
+    {
+      "priority": 4,
+      "item": "姿态刚度",
+      "detail": "姿态误差大部分也是静态（起点约 1.0～1.4°）；Kx 旋转 20→30，Kxd 旋转 3→3.7，同样先静态。"
+    },
+    {
+      "priority": 5,
+      "item": "加速度前馈",
+      "detail": "tau_ff 增加 M(q)·ddq_d，针对剩余约 22～31 ms 滞后；0.5× 下预计收益约 0.3 mm，1× 下更明显。"
+    },
+    {
+      "priority": 6,
+      "item": "关节阻尼 Kqd",
+      "detail": "模型估算最低几阶模态（约 1.3～2 Hz）主要由 Kq 决定，阻尼比约 0.35～0.5（转子惯量未知，属估算）；只有在实测出现超调/振荡时再提高 Kqd。"
+    }
+  ]
+}
