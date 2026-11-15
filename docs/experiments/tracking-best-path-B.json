@@ -1,24 +1,26 @@
 {
   "selected_best_by": "user",
-  "decision": "当前采用形式：B 路径（Franka 原生运动生成器 q_d/dq_d + 外部混合关节阻抗，08 增益）加 P1 慢速限幅积分修正。同参数下 B 优于 A；C（Franka 内部笛卡尔阻抗）不再考虑。",
+  "decision": "当前采用形式：B 路径（Franka 原生运动生成器 q_d/dq_d + 外部混合关节阻抗，08 增益）+ 慢速限幅积分（Ti=0.3 s）+ 按期望速度的库仑摩擦前馈（拟合值 0.5 倍）。同参数下 B 优于 A；C（Franka 内部笛卡尔阻抗）不再考虑。",
   "recorded_at": "2026-11-15",
   "supersedes": {
-    "recorded_at": "2026-11-13",
-    "best_sequence": 29,
-    "best_run_id": "web-20261113-210919-181298cbeed3",
-    "note": "旧记录以第 29 次（B，无积分）为最佳；现由 B+积分 三次重复取代，旧结果保留为下方 P0 基线组"
-  },
-  "best": {
-    "form": "B + P1 integral",
-    "sequences": [
-      34,
-      35,
-      36
-    ],
-    "run_ids": [
+    "recorded_at": "2026-11-15",
+    "best_form": "B + P1 integral",
+    "best_run_ids": [
       "web-20261115-180044-34442cf13411",
       "web-20261115-182647-321f869621c2",
       "web-20261115-182809-045126515701"
+    ],
+    "note": "上一版以 B + 积分 Ti=0.5 s（第 34–36 次）为最佳；现由 Ti=0.3 s + 摩擦前馈取代，旧组保留在 groups 中"
+  },
+  "best": {
+    "form": "B + integral Ti=0.3 s + Coulomb friction feedforward 0.5x",
+    "sequences": [
+      41,
+      42
+    ],
+    "run_ids": [
+      "web-20261115-185246-33acb8305b59",
+      "web-20261115-185353-17f4c750d0c1"
     ],
     "config": {
       "gains": {
@@ -103,7 +105,7 @@
         "point_percent": 10,
         "mounting_note": "倾角实测 44.85°，未修改 RPY",
         "integral": {
-          "time_s": 0.5,
+          "time_s": 0.3,
           "leak_s": 5.0,
           "limit_Nm": [
             2.5,
@@ -114,13 +116,34 @@
             1.0,
             1.0
           ]
+        },
+        "friction": {
+          "left": [
+            0.29,
+            0.3,
+            0.34,
+            0.25,
+            0.2,
+            0.1,
+            0.1
+          ],
+          "right": [
+            0.34,
+            0.35,
+            0.21,
+            0.27,
+            0.18,
+            0.12,
+            0.08
+          ],
+          "velocity_rad_s": 0.02
         }
       },
-      "notes": "P1 单因素：在 B 外部力矩上加入慢速、限幅、带泄漏的关节积分 tau_i=Kp(q)z，dz/dt=(q_d−q)/0.5s − z/5s，仅接入段与正式轨迹段生效，终点段 0.2 s 时间常数衰减后再交还 A；每关节限幅 [2.5,2.5,2.5,2.5,1.5,1,1] Nm（等比例缩放防饱和）。其余与第 29–31 次相同：08 增益、m_ee=0.65 kg、m_load=0、3 s 接入、100 Hz 低通、原限速与保护阈值。0.5x-50ms 正式轨迹（与第 29–31 次同一参考）。genrobot-base、空载无接触、夹爪固定约 89.98 mm。"
+      "notes": "积分时间常数单因素：B + 慢速限幅积分 tau_i=Kp(q)z，dz/dt=(q_d−q)/0.3s − z/5s，仅接入段与正式轨迹段生效，终点段 0.2 s 衰减后交还 A；每关节限幅 [2.5,2.5,2.5,2.5,1.5,1,1] Nm。与第 34–36 次（Ti=0.5 s）仅积分时间不同；08 增益、m_ee=0.65 kg、m_load=0、3 s 接入、100 Hz 低通、原限速与保护阈值不变。另加 B-only 库仑摩擦前馈 tau_f=Fc·tanh(dq_d/0.02)，Fc 取第 38 次离线拟合值的 0.5 倍：左 [.29,.30,.34,.25,.20,.10,.10]、右 [.34,.35,.21,.27,.18,.12,.08] Nm；与第 38–39 次（Ti=0.3，无摩擦前馈）单因素对比。0.5x-50ms 正式轨迹（与第 29–31、34–36 次同一参考）；重复第 1 次。genrobot-base、空载无接触、夹爪固定约 89.98 mm。"
     },
     "integral": {
-      "formula": "tau_i = Kp(q) z; dz/dt = (q_d - q)/Ti - z/T_leak（仅接入段与正式轨迹段）；终点段 z 以 0.2 s 衰减后交还 A；|tau_i| 按关节等比例限幅；tau = tau_policy + tau_i",
-      "time_s": 0.5,
+      "formula": "tau_i = Kp(q) z；dz/dt = (q_d − q)/Ti − z/T_leak（仅接入段与正式轨迹段）；终点段 z 以 0.2 s 衰减后交还 A；|tau_i| 按关节等比例限幅",
+      "time_s": 0.3,
       "leak_s": 5.0,
       "limit_Nm": [
         2.5,
@@ -130,226 +153,69 @@
         1.5,
         1.0,
         1.0
-      ],
-      "default": "关闭；关闭时与原 B 逐位一致",
-      "code": {
-        "left": "1d677e5",
-        "right": "d24b51e",
-        "console": "8cc077a"
-      }
+      ]
     },
-    "load": {
-      "m_ee_kg": 0.65,
-      "m_load_kg": 0.0,
-      "F_x_Cee_m": [
-        0.019,
-        0.000207,
-        0.056
-      ],
-      "note": "Desk 中 m_ee 由 0.591 修正为 0.65（线缆等附加质量）"
+    "friction": {
+      "formula": "tau_f = Fc · tanh(dq_d / v0)，只用原生期望速度 dq_d，不用实测速度；A 保持段与 C 不施加",
+      "velocity_rad_s": 0.02,
+      "coulomb_Nm": {
+        "left": [
+          0.29,
+          0.3,
+          0.34,
+          0.25,
+          0.2,
+          0.1,
+          0.1
+        ],
+        "right": [
+          0.34,
+          0.35,
+          0.21,
+          0.27,
+          0.18,
+          0.12,
+          0.08
+        ],
+        "velocity_rad_s": 0.02
+      },
+      "source": "第 38 次（Ti=0.3，无摩擦前馈）指令力矩中 >1.5 s 慢变以外部分对 tanh(dq_d/0.02) 的逐关节拟合，取 0.5 倍（离线比较中 0.5 倍优于 1 倍）"
     },
-    "mounting": {
-      "measured_tilt_deg": 44.85,
-      "note": "倾角仪实测；安装 RPY 未修改"
+    "torque": "tau = tau_policy(PD + 科氏) + tau_i + tau_f",
+    "defaults": "积分与摩擦前馈均为可选参数，默认关闭；关闭时 B 与原实现逐位一致",
+    "code": {
+      "left": [
+        "1d677e5 积分",
+        "13270c9 摩擦前馈"
+      ],
+      "right": [
+        "d24b51e 积分",
+        "1b09911 摩擦前馈"
+      ],
+      "console": [
+        "8cc077a 积分",
+        "4af1321 摩擦前馈"
+      ]
     }
   },
-  "repeat_groups": {
-    "summary": {
-      "B_baseline_P0": {
-        "left": {
-          "position_rmse_mm": {
-            "mean": 4.3587,
-            "std": 0.0265,
-            "values": [
-              4.3284,
-              4.3703,
-              4.3774
-            ]
-          },
-          "position_p95_mm": {
-            "mean": 6.2862,
-            "std": 0.0272,
-            "values": [
-              6.2789,
-              6.3163,
-              6.2633
-            ]
-          },
-          "position_max_mm": {
-            "mean": 7.2942,
-            "std": 0.0449,
-            "values": [
-              7.2907,
-              7.3408,
-              7.2513
-            ]
-          },
-          "orientation_rmse_deg": {
-            "mean": 1.124,
-            "std": 0.0391,
-            "values": [
-              1.1691,
-              1.1032,
-              1.0997
-            ]
-          },
-          "fitted_lag_ms": {
-            "mean": 52.6,
-            "std": 0.19,
-            "values": [
-              52.39,
-              52.76,
-              52.65
-            ]
-          }
-        },
-        "right": {
-          "position_rmse_mm": {
-            "mean": 3.9519,
-            "std": 0.0682,
-            "values": [
-              4.0302,
-              3.9198,
-              3.9056
-            ]
-          },
-          "position_p95_mm": {
-            "mean": 5.5736,
-            "std": 0.0638,
-            "values": [
-              5.6466,
-              5.5289,
-              5.5454
-            ]
-          },
-          "position_max_mm": {
-            "mean": 6.9415,
-            "std": 0.0382,
-            "values": [
-              6.9512,
-              6.8995,
-              6.9739
-            ]
-          },
-          "orientation_rmse_deg": {
-            "mean": 1.1917,
-            "std": 0.0316,
-            "values": [
-              1.2264,
-              1.1842,
-              1.1646
-            ]
-          },
-          "fitted_lag_ms": {
-            "mean": 40.2467,
-            "std": 0.535,
-            "values": [
-              40.85,
-              40.06,
-              39.83
-            ]
-          }
-        }
-      },
-      "B_integral_P1": {
-        "left": {
-          "position_rmse_mm": {
-            "mean": 1.9418,
-            "std": 0.0575,
-            "values": [
-              2.0065,
-              1.9222,
-              1.8966
-            ]
-          },
-          "position_p95_mm": {
-            "mean": 4.1264,
-            "std": 0.1815,
-            "values": [
-              4.3319,
-              4.0597,
-              3.9878
-            ]
-          },
-          "position_max_mm": {
-            "mean": 6.0455,
-            "std": 0.0824,
-            "values": [
-              6.1108,
-              6.0728,
-              5.9529
-            ]
-          },
-          "orientation_rmse_deg": {
-            "mean": 0.5165,
-            "std": 0.0079,
-            "values": [
-              0.5075,
-              0.5209,
-              0.5212
-            ]
-          },
-          "fitted_lag_ms": {
-            "mean": 15.1333,
-            "std": 0.4384,
-            "values": [
-              15.6,
-              15.07,
-              14.73
-            ]
-          }
-        },
-        "right": {
-          "position_rmse_mm": {
-            "mean": 1.7611,
-            "std": 0.0555,
-            "values": [
-              1.8234,
-              1.7429,
-              1.717
-            ]
-          },
-          "position_p95_mm": {
-            "mean": 3.5429,
-            "std": 0.1744,
-            "values": [
-              3.7357,
-              3.4969,
-              3.3962
-            ]
-          },
-          "position_max_mm": {
-            "mean": 5.9678,
-            "std": 1.4917,
-            "values": [
-              7.6859,
-              5.2153,
-              5.0024
-            ]
-          },
-          "orientation_rmse_deg": {
-            "mean": 0.5757,
-            "std": 0.0061,
-            "values": [
-              0.5826,
-              0.5731,
-              0.5714
-            ]
-          },
-          "fitted_lag_ms": {
-            "mean": 11.4667,
-            "std": 0.2495,
-            "values": [
-              11.75,
-              11.37,
-              11.28
-            ]
-          }
-        }
-      }
-    },
-    "runs": {
-      "B_baseline_P0": [
+  "load": {
+    "m_ee_kg": 0.65,
+    "m_load_kg": 0.0,
+    "F_x_Cee_m": [
+      0.019,
+      0.000207,
+      0.056
+    ],
+    "note": "Desk 中 m_ee 由 0.591 修正为 0.65（线缆等附加质量）"
+  },
+  "mounting": {
+    "measured_tilt_deg": 44.85,
+    "note": "倾角仪实测；安装 RPY 未修改"
+  },
+  "groups": {
+    "B_baseline": {
+      "name": "B 基线（无积分）",
+      "runs": [
         {
           "run_id": "web-20261113-210919-181298cbeed3",
           "sequence": 29,
@@ -606,7 +472,115 @@
           }
         }
       ],
-      "B_integral_P1": [
+      "summary": {
+        "left": {
+          "position_rmse_mm": {
+            "mean": 4.3587,
+            "std": 0.0265,
+            "values": [
+              4.3284,
+              4.3703,
+              4.3774
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 6.2862,
+            "std": 0.0272,
+            "values": [
+              6.2789,
+              6.3163,
+              6.2633
+            ]
+          },
+          "position_max_mm": {
+            "mean": 7.2942,
+            "std": 0.0449,
+            "values": [
+              7.2907,
+              7.3408,
+              7.2513
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 1.124,
+            "std": 0.0391,
+            "values": [
+              1.1691,
+              1.1032,
+              1.0997
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 52.6,
+            "std": 0.19,
+            "values": [
+              52.39,
+              52.76,
+              52.65
+            ]
+          }
+        },
+        "right": {
+          "position_rmse_mm": {
+            "mean": 3.9519,
+            "std": 0.0682,
+            "values": [
+              4.0302,
+              3.9198,
+              3.9056
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 5.5736,
+            "std": 0.0638,
+            "values": [
+              5.6466,
+              5.5289,
+              5.5454
+            ]
+          },
+          "position_max_mm": {
+            "mean": 6.9415,
+            "std": 0.0382,
+            "values": [
+              6.9512,
+              6.8995,
+              6.9739
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 1.1917,
+            "std": 0.0316,
+            "values": [
+              1.2264,
+              1.1842,
+              1.1646
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 40.2467,
+            "std": 0.535,
+            "values": [
+              40.85,
+              40.06,
+              39.83
+            ]
+          }
+        }
+      },
+      "short_probe": {
+        "run_id": "web-20261112-204659-56cfc9517894",
+        "label": "26-ABC-B-短程诊断8s-5mm-1deg-08参数",
+        "position_rmse_mm": {
+          "left": 3.9504,
+          "right": 3.5991
+        },
+        "note": "短程诊断（8 s、5 mm/1°），不计入正式排名"
+      }
+    },
+    "B_integral_Ti0.5": {
+      "name": "B + 积分 Ti=0.5 s",
+      "runs": [
         {
           "run_id": "web-20261115-180044-34442cf13411",
           "sequence": 34,
@@ -862,7 +836,652 @@
             }
           }
         }
-      ]
+      ],
+      "summary": {
+        "left": {
+          "position_rmse_mm": {
+            "mean": 1.9418,
+            "std": 0.0575,
+            "values": [
+              2.0065,
+              1.9222,
+              1.8966
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 4.1264,
+            "std": 0.1815,
+            "values": [
+              4.3319,
+              4.0597,
+              3.9878
+            ]
+          },
+          "position_max_mm": {
+            "mean": 6.0455,
+            "std": 0.0824,
+            "values": [
+              6.1108,
+              6.0728,
+              5.9529
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 0.5165,
+            "std": 0.0079,
+            "values": [
+              0.5075,
+              0.5209,
+              0.5212
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 15.1333,
+            "std": 0.4384,
+            "values": [
+              15.6,
+              15.07,
+              14.73
+            ]
+          }
+        },
+        "right": {
+          "position_rmse_mm": {
+            "mean": 1.7611,
+            "std": 0.0555,
+            "values": [
+              1.8234,
+              1.7429,
+              1.717
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 3.5429,
+            "std": 0.1744,
+            "values": [
+              3.7357,
+              3.4969,
+              3.3962
+            ]
+          },
+          "position_max_mm": {
+            "mean": 5.9678,
+            "std": 1.4917,
+            "values": [
+              7.6859,
+              5.2153,
+              5.0024
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 0.5757,
+            "std": 0.0061,
+            "values": [
+              0.5826,
+              0.5731,
+              0.5714
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 11.4667,
+            "std": 0.2495,
+            "values": [
+              11.75,
+              11.37,
+              11.28
+            ]
+          }
+        }
+      },
+      "short_probe": {
+        "run_id": "web-20261113-215600-b66e6772e2e0",
+        "label": "32-B-积分P1-短程-Ti0.5-leak5-m_ee0.65",
+        "position_rmse_mm": {
+          "left": 1.1518,
+          "right": 1.2097
+        },
+        "note": "短程诊断（8 s、5 mm/1°），不计入正式排名"
+      }
+    },
+    "B_integral_Ti0.3": {
+      "name": "B + 积分 Ti=0.3 s",
+      "runs": [
+        {
+          "run_id": "web-20261115-184417-2253a8203f43",
+          "sequence": 38,
+          "label": "38-B-积分P1-0.5x-50ms-Ti0.3-leak5-m_ee0.65-重复1",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 1.5234226762227612,
+                "p95": 2.9660840092817184,
+                "max": 5.462074419618234
+              },
+              "orientation_deg": {
+                "rmse": 0.4346978548870696,
+                "p95": 0.8141433533821216,
+                "max": 1.8604301826960867
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.5548558357577766,
+                  "p95": 3.0070760746139285,
+                  "max": 5.438638304539366
+                },
+                "orientation_deg": {
+                  "rmse": 0.38100141623999423,
+                  "p95": 0.7787685121958146,
+                  "max": 1.4652482689039796
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.537945602435861,
+                  "p95": 2.9741311121819236,
+                  "max": 5.396571195041299
+                },
+                "orientation_deg": {
+                  "rmse": 0.3746043807179795,
+                  "p95": 0.7608337150569172,
+                  "max": 1.4266309708385891
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 8.82,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 1.4702666051931843,
+                "p95": 2.9087627181918645,
+                "max": 6.7462491231171615
+              },
+              "orientation_deg": {
+                "rmse": 0.4987247991316653,
+                "p95": 0.9809811207284452,
+                "max": 2.6668878850637348
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.4719307459490578,
+                  "p95": 2.868133970757741,
+                  "max": 7.139325762446301
+                },
+                "orientation_deg": {
+                  "rmse": 0.41274209376245163,
+                  "p95": 0.8192506948678195,
+                  "max": 1.2176495283126056
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.4580935549229717,
+                  "p95": 2.8439769351377007,
+                  "max": 7.0468839526589235
+                },
+                "orientation_deg": {
+                  "rmse": 0.40774712766816373,
+                  "p95": 0.8036830911737215,
+                  "max": 1.2242888156653473
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 7.59,
+              "coverage_ok": true
+            }
+          }
+        },
+        {
+          "run_id": "web-20261115-184528-5f0967019b44",
+          "sequence": 39,
+          "label": "39-B-积分P1-0.5x-50ms-Ti0.3-leak5-m_ee0.65-重复2",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 1.5228361992021118,
+                "p95": 3.0845472950706694,
+                "max": 5.412051401250722
+              },
+              "orientation_deg": {
+                "rmse": 0.43871918956514333,
+                "p95": 0.8260092651820239,
+                "max": 1.966587574916588
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.556373653762077,
+                  "p95": 3.150760789771455,
+                  "max": 5.461219117902892
+                },
+                "orientation_deg": {
+                  "rmse": 0.38541972047955736,
+                  "p95": 0.7813104926321411,
+                  "max": 1.531937822294181
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.538882162714413,
+                  "p95": 3.092433421179316,
+                  "max": 5.435733940189358
+                },
+                "orientation_deg": {
+                  "rmse": 0.37878345275504677,
+                  "p95": 0.7551342469915325,
+                  "max": 1.4958932861309628
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 9.02,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 1.4286967950363376,
+                "p95": 2.8708914270830412,
+                "max": 4.422995651848183
+              },
+              "orientation_deg": {
+                "rmse": 0.49359993205218106,
+                "p95": 0.9314437030905585,
+                "max": 2.612182533462366
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.431885137249329,
+                  "p95": 2.8907627610994533,
+                  "max": 4.762953539986685
+                },
+                "orientation_deg": {
+                  "rmse": 0.4121744574231985,
+                  "p95": 0.8218210204426228,
+                  "max": 1.3512988134116852
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.4198788997081926,
+                  "p95": 2.8666623178660835,
+                  "max": 4.66734397270531
+                },
+                "orientation_deg": {
+                  "rmse": 0.4071243139226394,
+                  "p95": 0.8024917381669284,
+                  "max": 1.3095507884149433
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 6.86,
+              "coverage_ok": true
+            }
+          }
+        }
+      ],
+      "summary": {
+        "left": {
+          "position_rmse_mm": {
+            "mean": 1.5231,
+            "std": 0.0004,
+            "values": [
+              1.5234,
+              1.5228
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 3.0253,
+            "std": 0.0838,
+            "values": [
+              2.9661,
+              3.0845
+            ]
+          },
+          "position_max_mm": {
+            "mean": 5.4371,
+            "std": 0.0354,
+            "values": [
+              5.4621,
+              5.4121
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 0.4367,
+            "std": 0.0028,
+            "values": [
+              0.4347,
+              0.4387
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 8.92,
+            "std": 0.1414,
+            "values": [
+              8.82,
+              9.02
+            ]
+          }
+        },
+        "right": {
+          "position_rmse_mm": {
+            "mean": 1.4495,
+            "std": 0.0294,
+            "values": [
+              1.4703,
+              1.4287
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 2.8898,
+            "std": 0.0268,
+            "values": [
+              2.9088,
+              2.8709
+            ]
+          },
+          "position_max_mm": {
+            "mean": 5.5846,
+            "std": 1.6428,
+            "values": [
+              6.7462,
+              4.423
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 0.4962,
+            "std": 0.0036,
+            "values": [
+              0.4987,
+              0.4936
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 7.225,
+            "std": 0.5162,
+            "values": [
+              7.59,
+              6.86
+            ]
+          }
+        }
+      },
+      "short_probe": {
+        "run_id": "web-20261115-184300-86ed21313755",
+        "label": "37-B-积分P1-短程-Ti0.3-leak5-m_ee0.65",
+        "position_rmse_mm": {
+          "left": 0.7962,
+          "right": 0.85
+        },
+        "note": "短程诊断（8 s、5 mm/1°），不计入正式排名"
+      }
+    },
+    "B_integral_Ti0.3_friction": {
+      "name": "B + 积分 Ti=0.3 s + 库仑摩擦前馈 0.5×",
+      "runs": [
+        {
+          "run_id": "web-20261115-185246-33acb8305b59",
+          "sequence": 41,
+          "label": "41-B-积分P1-0.5x-50ms-Ti0.3-leak5-摩擦前馈0.5x-m_ee0.65-重复1",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 1.349949761673474,
+                "p95": 2.6322942672021488,
+                "max": 4.799263472933709
+              },
+              "orientation_deg": {
+                "rmse": 0.38838341092654793,
+                "p95": 0.720666556453531,
+                "max": 1.820379570738687
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.3955166396271672,
+                  "p95": 2.6580767883555567,
+                  "max": 4.932837745721977
+                },
+                "orientation_deg": {
+                  "rmse": 0.32583125482333153,
+                  "p95": 0.6379995110294495,
+                  "max": 1.4098804283381796
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.379247532079043,
+                  "p95": 2.6377162434327457,
+                  "max": 4.906445679250032
+                },
+                "orientation_deg": {
+                  "rmse": 0.3199050321826716,
+                  "p95": 0.6227877155049745,
+                  "max": 1.3733058056959468
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 7.59,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 1.2510258858200443,
+                "p95": 2.362213753729743,
+                "max": 5.637652753295227
+              },
+              "orientation_deg": {
+                "rmse": 0.4577180513764348,
+                "p95": 0.8643245373508306,
+                "max": 2.6421853618408124
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.2525941440526025,
+                  "p95": 2.278940843366537,
+                  "max": 6.1826315822515
+                },
+                "orientation_deg": {
+                  "rmse": 0.36244791995198766,
+                  "p95": 0.7108622276120585,
+                  "max": 1.0515915374690818
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.2403836311273653,
+                  "p95": 2.2578598687276124,
+                  "max": 6.090012713357262
+                },
+                "orientation_deg": {
+                  "rmse": 0.3576683555069653,
+                  "p95": 0.6985663193300615,
+                  "max": 1.0774574998802666
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 6.07,
+              "coverage_ok": true
+            }
+          }
+        },
+        {
+          "run_id": "web-20261115-185353-17f4c750d0c1",
+          "sequence": 42,
+          "label": "42-B-积分P1-0.5x-50ms-Ti0.3-leak5-摩擦前馈0.5x-m_ee0.65-重复2",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 1.3260341791282675,
+                "p95": 2.575461130527145,
+                "max": 4.842966474471151
+              },
+              "orientation_deg": {
+                "rmse": 0.3902923917419082,
+                "p95": 0.723706120790482,
+                "max": 1.8923632618170165
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.3645171219030787,
+                  "p95": 2.6401505274596446,
+                  "max": 5.002878366930745
+                },
+                "orientation_deg": {
+                  "rmse": 0.3271484811242186,
+                  "p95": 0.6505372816874976,
+                  "max": 1.4567285676344024
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.348307093868277,
+                  "p95": 2.617487353782139,
+                  "max": 4.981167278318384
+                },
+                "orientation_deg": {
+                  "rmse": 0.3212068596567851,
+                  "p95": 0.6350833308912819,
+                  "max": 1.4219616875502028
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 7.4,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 1.2475715815848454,
+                "p95": 2.3710288155418557,
+                "max": 4.118944550644617
+              },
+              "orientation_deg": {
+                "rmse": 0.4485880193838432,
+                "p95": 0.8233161210764185,
+                "max": 2.6177061226985514
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.248620289801305,
+                  "p95": 2.3340664370687287,
+                  "max": 4.304731948527695
+                },
+                "orientation_deg": {
+                  "rmse": 0.35602565496014676,
+                  "p95": 0.7008886958907976,
+                  "max": 1.2298904903395418
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.2379885501173,
+                  "p95": 2.3136778419106108,
+                  "max": 4.206706776778103
+                },
+                "orientation_deg": {
+                  "rmse": 0.35109384246708636,
+                  "p95": 0.6875159894407931,
+                  "max": 1.1914331474630153
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 5.61,
+              "coverage_ok": true
+            }
+          }
+        }
+      ],
+      "summary": {
+        "left": {
+          "position_rmse_mm": {
+            "mean": 1.338,
+            "std": 0.0169,
+            "values": [
+              1.3499,
+              1.326
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 2.6039,
+            "std": 0.0402,
+            "values": [
+              2.6323,
+              2.5755
+            ]
+          },
+          "position_max_mm": {
+            "mean": 4.8211,
+            "std": 0.0309,
+            "values": [
+              4.7993,
+              4.843
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 0.3893,
+            "std": 0.0013,
+            "values": [
+              0.3884,
+              0.3903
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 7.495,
+            "std": 0.1344,
+            "values": [
+              7.59,
+              7.4
+            ]
+          }
+        },
+        "right": {
+          "position_rmse_mm": {
+            "mean": 1.2493,
+            "std": 0.0024,
+            "values": [
+              1.251,
+              1.2476
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 2.3666,
+            "std": 0.0062,
+            "values": [
+              2.3622,
+              2.371
+            ]
+          },
+          "position_max_mm": {
+            "mean": 4.8783,
+            "std": 1.0739,
+            "values": [
+              5.6377,
+              4.1189
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 0.4532,
+            "std": 0.0065,
+            "values": [
+              0.4577,
+              0.4486
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 5.84,
+            "std": 0.3253,
+            "values": [
+              6.07,
+              5.61
+            ]
+          }
+        }
+      },
+      "short_probe": {
+        "run_id": "web-20261115-185205-a33a5aee868c",
+        "label": "40-B-积分P1-短程-Ti0.3-leak5-摩擦前馈0.5x-m_ee0.65",
+        "position_rmse_mm": {
+          "left": 0.785,
+          "right": 0.8439
+        },
+        "note": "短程诊断（8 s、5 mm/1°），不计入正式排名"
+      }
     }
   },
   "same_parameter_A_vs_B": {
@@ -1105,23 +1724,24 @@
     }
   },
   "findings": [
-    "B+积分 三次重复（第 34–36 次）相对 B 基线三次重复（第 29–31 次）：位置 RMSE 左/右 4.36±0.03/3.95±0.07 → 1.94±0.06/1.76±0.06 mm（约 -55%），姿态 RMSE 1.12/1.19 → 0.52/0.58°（约 -52%），拟合滞后 52.6/40.2 → 15.1/11.5 ms，p95 6.29/5.57 → 4.13/3.54 mm。",
-    "三次积分运行积分力矩峰值约为限幅的 0.86–0.94，正式轨迹段饱和比例 0%；终点段积分力矩衰减到 0 后交还 A。",
-    "右臂最大误差集中在轨迹起步 t≈3.3 s（第 34–36 次分别 7.69/5.22/5.00 mm，波动最大）：静止接入段积累的静态补偿在起步后方向变化，0.5 s 积分时间跟不上，短时过冲。左臂最大值稳定在 t≈8.57 s 约 6.0 mm。",
+    "最佳组（第 41–42 次）相对 B 基线（第 29–31 次）：位置 RMSE 左/右 4.36/3.95 → 1.34/1.25 mm（约 −69%），p95 6.29/5.57 → 2.60/2.37 mm，最大值 7.29/6.94 → 4.82/4.88 mm，姿态 1.12/1.19 → 0.39/0.45°，拟合滞后 52.6/40.2 → 7.5/5.8 ms。",
+    "积分时间常数：Ti 0.5 → 0.3 s 使位置 RMSE 1.94/1.76 → 1.52/1.45 mm；速度误差 3–10 Hz 与 10–50 Hz 频段与无积分 B29 持平，未见振荡。Ti=0.8 s 未测（离线估计与 0.5→0.3 实测均指向更小 Ti 更好）。",
+    "摩擦前馈：在 Ti=0.3 基础上位置 RMSE 1.52/1.45 → 1.34/1.25 mm，最大值 5.44/5.58 → 4.82/4.88 mm。离线分析显示起步段误差主要沿速度方向（滞后），加速度前馈估计仅约 0.1 mm，未采用。",
+    "剩余最大误差仍集中在右臂轨迹起步 t≈3.3 s（第 41/42 次 5.64/4.12 mm），且该点次间波动最大；左臂最大值稳定在约 4.8 mm。",
     "原 P1 方案（用 tau_ext 估计外力做前馈）不成立：tau_ext 约等于 0.3–0.5 倍自身指令力矩（相关 0.82–0.98），属循环依赖，已弃用。",
-    "第 33 次（积分首次全程）因右夹爪读数失效（error_code=4）中止，中止前右臂出现约 15 N 额外阻力；现场检查后第 34–36 次未复现，判断为现场外部问题，不计入比较。",
-    "A 仅有第 20 次一次完整结果；B 优于 A 的结论假设 A 的次间波动与 B 相近（B 约 1–2%）。"
+    "第 33 次（积分首次全程）因右夹爪读数失效（error_code=4）中止，中止前右臂出现约 15 N 额外阻力；现场检查后后续积分运行均未复现，不计入比较。",
+    "Ti=0.3 与摩擦前馈两组各只有 2 次重复；摩擦系数只试过 0.5 倍一档。A 仅有第 20 次一次完整结果。"
   ],
   "next_steps": [
     {
       "priority": 1,
-      "item": "起步过冲",
-      "detail": "针对 t≈3.3 s 右臂峰值：起步前后降低积分增益或在 dq_d 由零变化时短暂冻结积分；或加入 M(q)·ddq_d 加速度前馈。"
+      "item": "最佳组再重复 1 次",
+      "detail": "Ti=0.3 + 摩擦前馈目前 2 次，补到 3 次以与基线组同口径。"
     },
     {
       "priority": 2,
-      "item": "积分参数",
-      "detail": "目前只试过 Ti=0.5 s、leak=5 s；可比较 Ti=0.3/0.8 s，单因素、每组至少 2 次。"
+      "item": "摩擦系数",
+      "detail": "试 0.75 倍；或用最佳组数据重新拟合。"
     },
     {
       "priority": 3,
@@ -1130,8 +1750,8 @@
     },
     {
       "priority": 4,
-      "item": "A 重复",
-      "detail": "如需正式 A/B 排名，补跑 A 2 次。"
+      "item": "1× 速度",
+      "detail": "当前所有结果为 0.5×；若需原速度，先确认原生接口速度/加速度限制。"
     }
   ]
 }
