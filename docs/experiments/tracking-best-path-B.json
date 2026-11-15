@@ -1,13 +1,25 @@
 {
   "selected_best_by": "user",
-  "decision": "在同一 0.5× / 50 ms 平滑参考和 08 增益下，B 路径（Franka 原生运动生成器 q_d/dq_d + 外部混合关节阻抗）跟踪效果最好，作为当前采用形式。C（Franka 内部笛卡尔阻抗）不再考虑。",
-  "recorded_at": "2026-11-13",
+  "decision": "当前采用形式：B 路径（Franka 原生运动生成器 q_d/dq_d + 外部混合关节阻抗，08 增益）加 P1 慢速限幅积分修正。同参数下 B 优于 A；C（Franka 内部笛卡尔阻抗）不再考虑。",
+  "recorded_at": "2026-11-15",
+  "supersedes": {
+    "recorded_at": "2026-11-13",
+    "best_sequence": 29,
+    "best_run_id": "web-20261113-210919-181298cbeed3",
+    "note": "旧记录以第 29 次（B，无积分）为最佳；现由 B+积分 三次重复取代，旧结果保留为下方 P0 基线组"
+  },
   "best": {
-    "sequence": 29,
-    "run_id": "web-20261113-210919-181298cbeed3",
-    "label": "29-ABC-B-0.5x-50ms-m_ee0.65-08参数",
-    "status": "completed",
-    "comparable": true,
+    "form": "B + P1 integral",
+    "sequences": [
+      34,
+      35,
+      36
+    ],
+    "run_ids": [
+      "web-20261115-180044-34442cf13411",
+      "web-20261115-182647-321f869621c2",
+      "web-20261115-182809-045126515701"
+    ],
     "config": {
       "gains": {
         "left": {
@@ -89,94 +101,771 @@
         "test": "dynamic",
         "speed": 0.5,
         "point_percent": 10,
-        "mounting_note": "倾角实测 44.85°（接近名义 45°），未修改 RPY"
+        "mounting_note": "倾角实测 44.85°，未修改 RPY",
+        "integral": {
+          "time_s": 0.5,
+          "leak_s": 5.0,
+          "limit_Nm": [
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            1.5,
+            1.0,
+            1.0
+          ]
+        }
       },
-      "notes": "与第 21 次配对的单因素复测：唯一变化为 Desk 末端质量 m_ee 0.591→0.65 kg（考虑线缆等附加质量；F_x_Cee 未改，m_load=0）。倾角仪实测底座倾角 44.85°，安装 RPY 未修改。08 实际增益；共同 0.5× 时间轴（正式轨迹 40.688 s）、50 ms 平滑与端点处理、3 s 接入、100 Hz 低通、原限速和保护阈值均与 21 次相同。genrobot-base、空载无接触、夹爪固定约 89.98 mm。运行前因 11/13 01:11 两臂 libfranka UDP 超时锁定，已重启 mozi-backend/mozi-ros（teleop 模式）并只读核验状态。"
+      "notes": "P1 单因素：在 B 外部力矩上加入慢速、限幅、带泄漏的关节积分 tau_i=Kp(q)z，dz/dt=(q_d−q)/0.5s − z/5s，仅接入段与正式轨迹段生效，终点段 0.2 s 时间常数衰减后再交还 A；每关节限幅 [2.5,2.5,2.5,2.5,1.5,1,1] Nm（等比例缩放防饱和）。其余与第 29–31 次相同：08 增益、m_ee=0.65 kg、m_load=0、3 s 接入、100 Hz 低通、原限速与保护阈值。0.5x-50ms 正式轨迹（与第 29–31 次同一参考）。genrobot-base、空载无接触、夹爪固定约 89.98 mm。"
     },
-    "tracking": {
-      "left": {
-        "position_mm": {
-          "rmse": 4.328352890914196,
-          "p95": 6.278870623121184,
-          "max": 7.290714640434385
-        },
-        "orientation_deg": {
-          "rmse": 1.1691223678848148,
-          "p95": 1.8380175050319467,
-          "max": 2.838335142406038
-        },
-        "processed_reference_error": {
-          "position_mm": {
-            "rmse": 4.29520499772038,
-            "p95": 6.3030261838484325,
-            "max": 7.176584541936764
-          },
-          "orientation_deg": {
-            "rmse": 1.1339209215264432,
-            "p95": 1.780169833684731,
-            "max": 2.115637198001665
-          }
-        },
-        "native_desired_to_actual": {
-          "position_mm": {
-            "rmse": 4.24798974904912,
-            "p95": 6.220475351320422,
-            "max": 7.052290765622681
-          },
-          "orientation_deg": {
-            "rmse": 1.1221892565484117,
-            "p95": 1.7714220020595097,
-            "max": 2.0731545103265367
-          },
-          "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
-        },
-        "fitted_lag_ms": 52.39,
-        "coverage_ok": true,
-        "samples": 40689
-      },
-      "right": {
-        "position_mm": {
-          "rmse": 4.03019267633092,
-          "p95": 5.646648577646367,
-          "max": 6.951249399346446
-        },
-        "orientation_deg": {
-          "rmse": 1.2264442595319962,
-          "p95": 1.8281047746395933,
-          "max": 3.312932111804985
-        },
-        "processed_reference_error": {
-          "position_mm": {
-            "rmse": 3.9985750765197534,
-            "p95": 5.595845205258357,
-            "max": 7.478392429867823
-          },
-          "orientation_deg": {
-            "rmse": 1.180476931342903,
-            "p95": 1.7154282863818138,
-            "max": 2.0971656993016627
-          }
-        },
-        "native_desired_to_actual": {
-          "position_mm": {
-            "rmse": 3.970479558048231,
-            "p95": 5.5397666498364035,
-            "max": 7.30555892206218
-          },
-          "orientation_deg": {
-            "rmse": 1.1694495294819744,
-            "p95": 1.7043987373600324,
-            "max": 2.0780369510752483
-          },
-          "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
-        },
-        "fitted_lag_ms": 40.85,
-        "coverage_ok": true,
-        "samples": 40689
+    "integral": {
+      "formula": "tau_i = Kp(q) z; dz/dt = (q_d - q)/Ti - z/T_leak（仅接入段与正式轨迹段）；终点段 z 以 0.2 s 衰减后交还 A；|tau_i| 按关节等比例限幅；tau = tau_policy + tau_i",
+      "time_s": 0.5,
+      "leak_s": 5.0,
+      "limit_Nm": [
+        2.5,
+        2.5,
+        2.5,
+        2.5,
+        1.5,
+        1.0,
+        1.0
+      ],
+      "default": "关闭；关闭时与原 B 逐位一致",
+      "code": {
+        "left": "1d677e5",
+        "right": "d24b51e",
+        "console": "8cc077a"
       }
+    },
+    "load": {
+      "m_ee_kg": 0.65,
+      "m_load_kg": 0.0,
+      "F_x_Cee_m": [
+        0.019,
+        0.000207,
+        0.056
+      ],
+      "note": "Desk 中 m_ee 由 0.591 修正为 0.65（线缆等附加质量）"
+    },
+    "mounting": {
+      "measured_tilt_deg": 44.85,
+      "note": "倾角仪实测；安装 RPY 未修改"
     }
   },
-  "same_parameter_comparison": {
+  "repeat_groups": {
+    "summary": {
+      "B_baseline_P0": {
+        "left": {
+          "position_rmse_mm": {
+            "mean": 4.3587,
+            "std": 0.0265,
+            "values": [
+              4.3284,
+              4.3703,
+              4.3774
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 6.2862,
+            "std": 0.0272,
+            "values": [
+              6.2789,
+              6.3163,
+              6.2633
+            ]
+          },
+          "position_max_mm": {
+            "mean": 7.2942,
+            "std": 0.0449,
+            "values": [
+              7.2907,
+              7.3408,
+              7.2513
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 1.124,
+            "std": 0.0391,
+            "values": [
+              1.1691,
+              1.1032,
+              1.0997
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 52.6,
+            "std": 0.19,
+            "values": [
+              52.39,
+              52.76,
+              52.65
+            ]
+          }
+        },
+        "right": {
+          "position_rmse_mm": {
+            "mean": 3.9519,
+            "std": 0.0682,
+            "values": [
+              4.0302,
+              3.9198,
+              3.9056
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 5.5736,
+            "std": 0.0638,
+            "values": [
+              5.6466,
+              5.5289,
+              5.5454
+            ]
+          },
+          "position_max_mm": {
+            "mean": 6.9415,
+            "std": 0.0382,
+            "values": [
+              6.9512,
+              6.8995,
+              6.9739
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 1.1917,
+            "std": 0.0316,
+            "values": [
+              1.2264,
+              1.1842,
+              1.1646
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 40.2467,
+            "std": 0.535,
+            "values": [
+              40.85,
+              40.06,
+              39.83
+            ]
+          }
+        }
+      },
+      "B_integral_P1": {
+        "left": {
+          "position_rmse_mm": {
+            "mean": 1.9418,
+            "std": 0.0575,
+            "values": [
+              2.0065,
+              1.9222,
+              1.8966
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 4.1264,
+            "std": 0.1815,
+            "values": [
+              4.3319,
+              4.0597,
+              3.9878
+            ]
+          },
+          "position_max_mm": {
+            "mean": 6.0455,
+            "std": 0.0824,
+            "values": [
+              6.1108,
+              6.0728,
+              5.9529
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 0.5165,
+            "std": 0.0079,
+            "values": [
+              0.5075,
+              0.5209,
+              0.5212
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 15.1333,
+            "std": 0.4384,
+            "values": [
+              15.6,
+              15.07,
+              14.73
+            ]
+          }
+        },
+        "right": {
+          "position_rmse_mm": {
+            "mean": 1.7611,
+            "std": 0.0555,
+            "values": [
+              1.8234,
+              1.7429,
+              1.717
+            ]
+          },
+          "position_p95_mm": {
+            "mean": 3.5429,
+            "std": 0.1744,
+            "values": [
+              3.7357,
+              3.4969,
+              3.3962
+            ]
+          },
+          "position_max_mm": {
+            "mean": 5.9678,
+            "std": 1.4917,
+            "values": [
+              7.6859,
+              5.2153,
+              5.0024
+            ]
+          },
+          "orientation_rmse_deg": {
+            "mean": 0.5757,
+            "std": 0.0061,
+            "values": [
+              0.5826,
+              0.5731,
+              0.5714
+            ]
+          },
+          "fitted_lag_ms": {
+            "mean": 11.4667,
+            "std": 0.2495,
+            "values": [
+              11.75,
+              11.37,
+              11.28
+            ]
+          }
+        }
+      }
+    },
+    "runs": {
+      "B_baseline_P0": [
+        {
+          "run_id": "web-20261113-210919-181298cbeed3",
+          "sequence": 29,
+          "label": "29-ABC-B-0.5x-50ms-m_ee0.65-08参数",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 4.328352890914196,
+                "p95": 6.278870623121184,
+                "max": 7.290714640434385
+              },
+              "orientation_deg": {
+                "rmse": 1.1691223678848148,
+                "p95": 1.8380175050319467,
+                "max": 2.838335142406038
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 4.29520499772038,
+                  "p95": 6.3030261838484325,
+                  "max": 7.176584541936764
+                },
+                "orientation_deg": {
+                  "rmse": 1.1339209215264432,
+                  "p95": 1.780169833684731,
+                  "max": 2.115637198001665
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 4.24798974904912,
+                  "p95": 6.220475351320422,
+                  "max": 7.052290765622681
+                },
+                "orientation_deg": {
+                  "rmse": 1.1221892565484117,
+                  "p95": 1.7714220020595097,
+                  "max": 2.0731545103265367
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 52.39,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 4.03019267633092,
+                "p95": 5.646648577646367,
+                "max": 6.951249399346446
+              },
+              "orientation_deg": {
+                "rmse": 1.2264442595319962,
+                "p95": 1.8281047746395933,
+                "max": 3.312932111804985
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 3.9985750765197534,
+                  "p95": 5.595845205258357,
+                  "max": 7.478392429867823
+                },
+                "orientation_deg": {
+                  "rmse": 1.180476931342903,
+                  "p95": 1.7154282863818138,
+                  "max": 2.0971656993016627
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 3.970479558048231,
+                  "p95": 5.5397666498364035,
+                  "max": 7.30555892206218
+                },
+                "orientation_deg": {
+                  "rmse": 1.1694495294819744,
+                  "p95": 1.7043987373600324,
+                  "max": 2.0780369510752483
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 40.85,
+              "coverage_ok": true
+            }
+          }
+        },
+        {
+          "run_id": "web-20261113-214304-a89d948f23a7",
+          "sequence": 30,
+          "label": "30-ABC-B-0.5x-50ms-m_ee0.65-08参数-P0重复1",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 4.370265911960149,
+                "p95": 6.316255512935633,
+                "max": 7.340765017143481
+              },
+              "orientation_deg": {
+                "rmse": 1.1031955895790009,
+                "p95": 1.834915722481362,
+                "max": 2.842018014107778
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 4.337710757270574,
+                  "p95": 6.3054455982486255,
+                  "max": 7.144211079935169
+                },
+                "orientation_deg": {
+                  "rmse": 1.0689957630389038,
+                  "p95": 1.819596075102711,
+                  "max": 2.0977680558151692
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 4.294135410514842,
+                  "p95": 6.227445910854861,
+                  "max": 7.021537227388071
+                },
+                "orientation_deg": {
+                  "rmse": 1.0559938899555192,
+                  "p95": 1.7982703349951168,
+                  "max": 2.047089888643487
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 52.76,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 3.9197687431660118,
+                "p95": 5.528863562076141,
+                "max": 6.899463715892097
+              },
+              "orientation_deg": {
+                "rmse": 1.1842064599272715,
+                "p95": 1.8058188254340433,
+                "max": 3.289318951099919
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 3.8868154646341333,
+                  "p95": 5.467338298815386,
+                  "max": 7.370732324261201
+                },
+                "orientation_deg": {
+                  "rmse": 1.1395776996837872,
+                  "p95": 1.708732889593954,
+                  "max": 2.039125714964346
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 3.8587153334683433,
+                  "p95": 5.437027819746318,
+                  "max": 7.197645705324777
+                },
+                "orientation_deg": {
+                  "rmse": 1.1281390548250105,
+                  "p95": 1.688464442976882,
+                  "max": 2.0186840399524955
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 40.06,
+              "coverage_ok": true
+            }
+          }
+        },
+        {
+          "run_id": "web-20261113-214441-7b0d57a020ef",
+          "sequence": 31,
+          "label": "31-ABC-B-0.5x-50ms-m_ee0.65-08参数-P0重复2",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 4.3774198734350875,
+                "p95": 6.263349255222525,
+                "max": 7.251256178495137
+              },
+              "orientation_deg": {
+                "rmse": 1.099721351990292,
+                "p95": 1.8373457438096332,
+                "max": 2.811096894127829
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 4.344723959088156,
+                  "p95": 6.260264589196254,
+                  "max": 7.090360166148249
+                },
+                "orientation_deg": {
+                  "rmse": 1.0656390596444278,
+                  "p95": 1.8037849387332117,
+                  "max": 2.075167424643659
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 4.301906904451927,
+                  "p95": 6.186426960978904,
+                  "max": 6.966224822550741
+                },
+                "orientation_deg": {
+                  "rmse": 1.0526570929971646,
+                  "p95": 1.7855968475718638,
+                  "max": 2.025336645282433
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 52.65,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 3.905607747597974,
+                "p95": 5.545398606927039,
+                "max": 6.973892474176799
+              },
+              "orientation_deg": {
+                "rmse": 1.1645561418350798,
+                "p95": 1.7796271438332973,
+                "max": 3.287286498801415
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 3.872949209633882,
+                  "p95": 5.489654925145549,
+                  "max": 7.279470947358556
+                },
+                "orientation_deg": {
+                  "rmse": 1.1196113213988184,
+                  "p95": 1.6764587113636162,
+                  "max": 2.0009962228090807
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 3.8448822613042193,
+                  "p95": 5.437979042552595,
+                  "max": 7.106209649011695
+                },
+                "orientation_deg": {
+                  "rmse": 1.108047511809001,
+                  "p95": 1.6563220023635876,
+                  "max": 1.9805474557633589
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 39.83,
+              "coverage_ok": true
+            }
+          }
+        }
+      ],
+      "B_integral_P1": [
+        {
+          "run_id": "web-20261115-180044-34442cf13411",
+          "sequence": 34,
+          "label": "34-B-积分P1-0.5x-50ms-Ti0.5-leak5-m_ee0.65",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 2.0065372996295263,
+                "p95": 4.33185464226654,
+                "max": 6.110807320397384
+              },
+              "orientation_deg": {
+                "rmse": 0.5074562418930512,
+                "p95": 0.9770598269791398,
+                "max": 1.8226816224771405
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 2.0391269914533856,
+                  "p95": 4.353825746424342,
+                  "max": 6.114235020497226
+                },
+                "orientation_deg": {
+                  "rmse": 0.4598914985338881,
+                  "p95": 0.951333646729745,
+                  "max": 1.3744269640150129
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 2.0118006309163805,
+                  "p95": 4.284651777985062,
+                  "max": 6.069748566324103
+                },
+                "orientation_deg": {
+                  "rmse": 0.449646600022394,
+                  "p95": 0.9132793396589255,
+                  "max": 1.3423810488770833
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 15.6,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 1.8234146805367843,
+                "p95": 3.7356584418510956,
+                "max": 7.685876615365506
+              },
+              "orientation_deg": {
+                "rmse": 0.5826295016452562,
+                "p95": 1.1248990924133913,
+                "max": 2.6316364632402975
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.8359590342723717,
+                  "p95": 3.760948486190425,
+                  "max": 7.934807197177223
+                },
+                "orientation_deg": {
+                  "rmse": 0.5157528370905011,
+                  "p95": 1.022592664098899,
+                  "max": 1.4331669108375842
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.8178074962302486,
+                  "p95": 3.736674393091588,
+                  "max": 7.8377892855723585
+                },
+                "orientation_deg": {
+                  "rmse": 0.5095577394774549,
+                  "p95": 1.0052108237831456,
+                  "max": 1.4146646440185364
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 11.75,
+              "coverage_ok": true
+            }
+          }
+        },
+        {
+          "run_id": "web-20261115-182647-321f869621c2",
+          "sequence": 35,
+          "label": "35-B-积分P1-0.5x-50ms-Ti0.5-leak5-m_ee0.65-重复1",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 1.9221656123206958,
+                "p95": 4.059702071550217,
+                "max": 6.072803252013009
+              },
+              "orientation_deg": {
+                "rmse": 0.5208770171963687,
+                "p95": 1.0045506880479005,
+                "max": 2.1210775996331788
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.9570743218554114,
+                  "p95": 4.110408829021787,
+                  "max": 6.0849456592255935
+                },
+                "orientation_deg": {
+                  "rmse": 0.4753118822709985,
+                  "p95": 0.9750316439908948,
+                  "max": 1.6024462460288205
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.9302369784875706,
+                  "p95": 4.052481817760495,
+                  "max": 6.0422940310861755
+                },
+                "orientation_deg": {
+                  "rmse": 0.4653056043527711,
+                  "p95": 0.9417689823143149,
+                  "max": 1.572883897396118
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 15.07,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 1.7428533539379767,
+                "p95": 3.496869801719222,
+                "max": 5.215263179666381
+              },
+              "orientation_deg": {
+                "rmse": 0.5730983256498516,
+                "p95": 1.1096081467741246,
+                "max": 2.6699157702661984
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.7582755524256746,
+                  "p95": 3.5963760715797926,
+                  "max": 5.729801938312408
+                },
+                "orientation_deg": {
+                  "rmse": 0.5030913093756627,
+                  "p95": 0.9956279756817795,
+                  "max": 1.5844204739590835
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.7404866029764505,
+                  "p95": 3.5693867025587167,
+                  "max": 5.616814038386508
+                },
+                "orientation_deg": {
+                  "rmse": 0.4965250832492711,
+                  "p95": 0.9832137264534898,
+                  "max": 1.5425341096472094
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 11.37,
+              "coverage_ok": true
+            }
+          }
+        },
+        {
+          "run_id": "web-20261115-182809-045126515701",
+          "sequence": 36,
+          "label": "36-B-积分P1-0.5x-50ms-Ti0.5-leak5-m_ee0.65-重复2",
+          "tracking": {
+            "left": {
+              "position_mm": {
+                "rmse": 1.89664162103372,
+                "p95": 3.987785294106948,
+                "max": 5.952859242038608
+              },
+              "orientation_deg": {
+                "rmse": 0.5212284691342736,
+                "p95": 1.0303058498224,
+                "max": 2.1002751628362697
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.926095926507279,
+                  "p95": 4.037929138353811,
+                  "max": 5.9745391693059835
+                },
+                "orientation_deg": {
+                  "rmse": 0.47574178306819026,
+                  "p95": 0.9911193706937202,
+                  "max": 1.581441532837064
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.9005579863083941,
+                  "p95": 3.9833499203565492,
+                  "max": 5.931495162662476
+                },
+                "orientation_deg": {
+                  "rmse": 0.46564646167806545,
+                  "p95": 0.9571246229013378,
+                  "max": 1.550910817956218
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 14.73,
+              "coverage_ok": true
+            },
+            "right": {
+              "position_mm": {
+                "rmse": 1.7170100166975233,
+                "p95": 3.396187436222574,
+                "max": 5.002385808915759
+              },
+              "orientation_deg": {
+                "rmse": 0.5713717332649906,
+                "p95": 1.1107220934812154,
+                "max": 2.647871482425666
+              },
+              "processed_reference_error": {
+                "position_mm": {
+                  "rmse": 1.731751760240783,
+                  "p95": 3.4985798468486644,
+                  "max": 5.425369082453054
+                },
+                "orientation_deg": {
+                  "rmse": 0.5021029441954037,
+                  "p95": 1.0005347949519194,
+                  "max": 1.529954910281972
+                }
+              },
+              "native_desired_to_actual": {
+                "position_mm": {
+                  "rmse": 1.7139627015855108,
+                  "p95": 3.4618104684878217,
+                  "max": 5.308854519854679
+                },
+                "orientation_deg": {
+                  "rmse": 0.4954705684348493,
+                  "p95": 0.9925337614665478,
+                  "max": 1.5092449145328617
+                },
+                "source": "O_T_EE_d and measured O_T_EE in the same native RobotState; no shift"
+              },
+              "fitted_lag_ms": 11.28,
+              "coverage_ok": true
+            }
+          }
+        }
+      ]
+    }
+  },
+  "same_parameter_A_vs_B": {
     "A20": {
       "sequence": 20,
       "run_id": "web-20261112-200256-b39e94aff814",
@@ -416,47 +1105,33 @@
     }
   },
   "findings": [
-    "同参数下 B21 相对 A20：位置 RMSE 左/右 -13%/-8%，位置最大值 -26%/-23%，姿态 RMSE -26%/-25%，拟合滞后少约 18～20 ms。",
-    "B29 只把 Desk m_ee 从 0.591 改为 0.65 kg（倾角实测 44.85°，RPY 未改）：起点静态误差左/右 4.71→3.98 mm、4.80→3.71 mm；全程位置 RMSE 仅下降 1%～3%，属于单次实验波动范围。",
-    "B 的主要误差是准静态偏置：同周期 native 目标→实测误差可由 tau_ext 换算的 2.5～3.5 N 法兰外力线性解释，扣除后残差约 1.5～1.7 mm；再扣除目标速度项后约 1.2～1.3 mm（等效滞后约 22～31 ms）。",
-    "C 在正式轨迹 t≈2.5 s 起步即沿固定方向发散，误差沿该方向的二阶拟合显示刚度约符合 900 N/m 而等效阻尼为负（约 -20～-40 1/s）；FK(q_d) 与 O_T_EE_d 一致，接入/坐标层面已排除，固件机理未确认。",
-    "每条路径只有 1～2 次完整有效结果，A/B 差距中低于约 10% 的部分仍需重复实验确认。"
+    "B+积分 三次重复（第 34–36 次）相对 B 基线三次重复（第 29–31 次）：位置 RMSE 左/右 4.36±0.03/3.95±0.07 → 1.94±0.06/1.76±0.06 mm（约 -55%），姿态 RMSE 1.12/1.19 → 0.52/0.58°（约 -52%），拟合滞后 52.6/40.2 → 15.1/11.5 ms，p95 6.29/5.57 → 4.13/3.54 mm。",
+    "三次积分运行积分力矩峰值约为限幅的 0.86–0.94，正式轨迹段饱和比例 0%；终点段积分力矩衰减到 0 后交还 A。",
+    "右臂最大误差集中在轨迹起步 t≈3.3 s（第 34–36 次分别 7.69/5.22/5.00 mm，波动最大）：静止接入段积累的静态补偿在起步后方向变化，0.5 s 积分时间跟不上，短时过冲。左臂最大值稳定在 t≈8.57 s 约 6.0 mm。",
+    "原 P1 方案（用 tau_ext 估计外力做前馈）不成立：tau_ext 约等于 0.3–0.5 倍自身指令力矩（相关 0.82–0.98），属循环依赖，已弃用。",
+    "第 33 次（积分首次全程）因右夹爪读数失效（error_code=4）中止，中止前右臂出现约 15 N 额外阻力；现场检查后第 34–36 次未复现，判断为现场外部问题，不计入比较。",
+    "A 仅有第 20 次一次完整结果；B 优于 A 的结论假设 A 的次间波动与 B 相近（B 约 1–2%）。"
   ],
-  "tracking_improvement_plan": [
-    {
-      "priority": 0,
-      "item": "重复基线",
-      "detail": "B29 配置再跑 2 次（可与 A 交替），得到 B 的实验间波动，之后每项改动都与该波动比较。"
-    },
+  "next_steps": [
     {
       "priority": 1,
-      "item": "准静态外力偏置补偿",
-      "detail": "在 B 的外部力矩中加入 J^T·F_hat，F_hat 为 tau_ext 换算法兰外力的慢速低通（秒级）并限幅；仅空载无接触时启用。离线预计位置 RMSE 约 4 mm→1.5～2 mm。"
+      "item": "起步过冲",
+      "detail": "针对 t≈3.3 s 右臂峰值：起步前后降低积分增益或在 dq_d 由零变化时短暂冻结积分；或加入 M(q)·ddq_d 加速度前馈。"
     },
     {
       "priority": 2,
-      "item": "末端负载/质心辨识",
-      "detail": "B29 显示单改质量几乎不改变外力，偏置随姿态变化；用多姿态静态采样拟合 m_ee 与 F_x_Cee（必要时含线缆等效力），从模型层面减小偏置。"
+      "item": "积分参数",
+      "detail": "目前只试过 Ti=0.5 s、leak=5 s；可比较 Ti=0.3/0.8 s，单因素、每组至少 2 次。"
     },
     {
       "priority": 3,
       "item": "提高平移刚度 Kx",
-      "detail": "静态偏置约为 F/k，等效 k≈600～730 N/m。Kx 900→1200→1500，按 sqrt(k) 同步提高 Kxd（40→46→52）；先 10% 点静态，再短程，再全程；15 mm 保护不变。"
+      "detail": "900→1200，Kxd 按 sqrt(k) 同步提高；先静态再短程再全程，15 mm 保护不变。"
     },
     {
       "priority": 4,
-      "item": "姿态刚度",
-      "detail": "姿态误差大部分也是静态（起点约 1.0～1.4°）；Kx 旋转 20→30，Kxd 旋转 3→3.7，同样先静态。"
-    },
-    {
-      "priority": 5,
-      "item": "加速度前馈",
-      "detail": "tau_ff 增加 M(q)·ddq_d，针对剩余约 22～31 ms 滞后；0.5× 下预计收益约 0.3 mm，1× 下更明显。"
-    },
-    {
-      "priority": 6,
-      "item": "关节阻尼 Kqd",
-      "detail": "模型估算最低几阶模态（约 1.3～2 Hz）主要由 Kq 决定，阻尼比约 0.35～0.5（转子惯量未知，属估算）；只有在实测出现超调/振荡时再提高 Kqd。"
+      "item": "A 重复",
+      "detail": "如需正式 A/B 排名，补跑 A 2 次。"
     }
   ]
 }
