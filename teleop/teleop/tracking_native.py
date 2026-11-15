@@ -37,12 +37,28 @@ def active(robot):
     return record
 
 
-def configure(robot, artifact, sha256, path, record_id, stiffness):
+def validate_integral(value):
+    """P1 B-only slow integral; None keeps the unchanged B baseline."""
+    if value is None:return None
+    if not isinstance(value,dict) or set(value)!={'time_s','leak_s','limit_Nm'}:
+        raise ValueError('Integral requires time_s, leak_s and limit_Nm')
+    t,leak,limit=value['time_s'],value['leak_s'],value['limit_Nm']
+    if type(t) not in (int,float) or not .2<=t<=5:raise ValueError('Integral time must be 0.2-5 s')
+    if type(leak) not in (int,float) or not 1<=leak<=30 or leak<=t:raise ValueError('Integral leak must be 1-30 s and exceed the integral time')
+    if (not isinstance(limit,list) or len(limit)!=7 or
+            any(type(v) not in (int,float) or not np.isfinite(v) or not 0<v<=3 for v in limit)):
+        raise ValueError('Integral torque limit must be seven values in (0, 3] Nm')
+    return dict(time_s=float(t),leak_s=float(leak),limit_Nm=[float(v) for v in limit])
+
+
+def configure(robot, artifact, sha256, path, record_id, stiffness, integral=None):
     from teleop.tracking_reference import check,check_native_mode
     from teleop.tracking_policy import NativeTrackingHybridJointImpedanceControl
     from teleop.tracking_impedance import snapshot
     if getattr(robot,'_tracking_native',None):raise RuntimeError('Native experiment already configured')
     if path not in ('B','C'):raise ValueError('Native path must be B or C')
+    integral=validate_integral(integral)
+    if integral and path!='B':raise ValueError('Integral correction is B-only')
     if type(record_id) is not int or not 0<record_id<2**48:raise ValueError('Invalid recording ID')
     if not isinstance(artifact,str) or not re.fullmatch(r'[a-f0-9]{24}\.npz',artifact):raise ValueError('Invalid preload artifact name')
     source=ROOT/artifact
@@ -76,6 +92,8 @@ def configure(robot, artifact, sha256, path, record_id, stiffness):
     policy=NativeTrackingHybridJointImpedanceControl(joint_pos_current=interface.get_joint_positions(),
         robot_model=interface.robot_model,ignore_gravity=True,poses=torch.from_numpy(poses),path=1 if path=='B' else 2,
         record_id=record_id,stiffness=torch.tensor(stiffness,dtype=torch.float64),
+        **(dict(integral_time_s=integral['time_s'],integral_leak_s=integral['leak_s'],
+                integral_limit_Nm=torch.tensor(integral['limit_Nm'],dtype=torch.float32)) if integral else {}),
         **{k:torch.tensor(v,dtype=torch.float32) for k,v in gains.items()})
     # A failed/uncertain SetController must retain ownership and fail closed.
     robot._tracking_native=dict(path=path,record_id=record_id,pending=True)
@@ -87,7 +105,10 @@ def configure(robot, artifact, sha256, path, record_id, stiffness):
             for p in (Path(__file__),Path(__file__).with_name('tracking_reference.py'))}),
         cartesian_stiffness=list(stiffness) if path=='C' else None,prelude_s=3.,
         controller='NativeTrackingHybridJointImpedanceControl' if path=='B' else 'Franka internal Cartesian impedance',
-        control_law_id='hybrid-native-qd-v1' if path=='B' else 'franka-cartesian-impedance-firmware',
+        control_law_id=('hybrid-native-qd-integral-v1' if integral else 'hybrid-native-qd-v1') if path=='B' else 'franka-cartesian-impedance-firmware',
+        integral=integral,
+        integral_formula=('tau_i = Kp(q) z; dz/dt = (q_d - q)/Ti - z/T_leak in phases 1-2; z decays with 0.2 s otherwise; '
+                          '|tau_i| <= limit by uniform scaling; tau = tau_policy + tau_i') if integral else None,
         formula=FORMULA if path=='B' else 'w ≈ K_C e_x + D_C(v_ref − v); explanatory model, not a verified complete firmware law',
         velocity_formula='dq_ref = native dq_d from the same RobotState' if path=='B' else 'Franka internal motion generator; no independent KD interface',
         initial_native=copy.deepcopy(state),F_T_EE=list(raw['native_F_T_EE']),

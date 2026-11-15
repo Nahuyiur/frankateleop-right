@@ -14,7 +14,7 @@ class Model(torch.nn.Module):
         return 3.+q+.25*dq+ddq
 
 
-def policy(path):
+def policy(path,**extra):
     args=dict(joint_pos_current=torch.zeros(7),robot_model=Model(),
               **{k:torch.tensor(v) for k,v in BASELINE.items()})
     if path==0:p=TrackingHybridJointImpedanceControl(**args,record_id=123)
@@ -22,7 +22,7 @@ def policy(path):
         poses=torch.eye(4,dtype=torch.float64).reshape(1,16).repeat(101,1)
         poses[:,12]=torch.arange(101)*.00001
         p=NativeTrackingHybridJointImpedanceControl(**args,path=path,poses=poses,record_id=123,
-                                                   stiffness=torch.tensor([900.,900.,900.,20.,20.,20.]))
+                                                   stiffness=torch.tensor([900.,900.,900.,20.,20.,20.]),**extra)
     stream=io.BytesIO();torch.jit.save(torch.jit.script(p),stream);stream.seek(0)
     return torch.jit.load(stream)
 
@@ -123,6 +123,67 @@ def test_c_requires_flange_frame_but_stopped_handoff_accepts_restoration():
     assert observed(robot)[1]['path']==2
     state.update(path=3,EE_T_K=np.eye(4).T.ravel().tolist())
     assert observed(robot)[1]['path']==3
+
+
+LIMIT=[2.5,2.5,2.5,2.5,1.5,1.,1.]
+
+
+def integral_policy(path=1):
+    return policy(path,integral_time_s=.5,integral_leak_s=5.,integral_limit_Nm=torch.tensor(LIMIT))
+
+
+def run_integral(b,start,ms0,count,path=1,wall_offset_ms=0):
+    out=None
+    for k in range(count):
+        ms=ms0+k
+        out=b(state(path=path,ms=ms,wall=start+int((ms-ms0+wall_offset_ms)*1e6)+1000))
+    return out
+
+
+def test_integral_disabled_is_bitwise_unchanged_baseline():
+    plain,disabled=policy(1),policy(1,integral_time_s=0.)
+    s=state()
+    with torch.no_grad():assert torch.equal(plain(s)['joint_torques'],disabled(s)['joint_torques'])
+
+
+def test_integral_inactive_before_start_then_grows_bounded_and_decays():
+    b,ref=integral_policy(),policy(1);now=time.time_ns();start=now+1000
+    with torch.no_grad():
+        for p in (b,ref):p.update(dict(start_wall_ns=torch.tensor([float(start)],dtype=torch.float64),
+                                       lease_wall_ns=torch.tensor([float(start+60_000_000_000)],dtype=torch.float64)))
+        # Waiting (path B active, not started): no integral contribution.
+        idle=b(state(ms=9000,wall=now))['joint_torques']
+        assert torch.allclose(idle,ref(state(ms=9000,wall=now))['joint_torques'])
+        run_integral(b,start,10000,2000)            # 2 s of prelude with a constant q_d - q error
+        s=state(ms=12000,wall=start+2_000_000_000+1000)
+        delta=b(s)['joint_torques']-ref(s)['joint_torques']
+        assert float(delta.abs().max())>.05, 'integral must act during the prelude/trajectory'
+        assert torch.all(delta.abs()<=torch.tensor(LIMIT)+1e-5), 'per-joint torque limit'
+        assert torch.all(torch.sign(delta)==torch.sign(state()['native_q_d']-state()['joint_positions'])), 'acts along the stiffness-weighted error'
+        run_integral(b,start,12001,8000)            # saturate, then the endpoint (phase 3)
+        s=state(ms=21500,wall=start+11_500_000_000)
+        late=b(s)['joint_torques']-ref(s)['joint_torques']
+        assert float(late.abs().max())<.01, 'integral must decay to ~0 at the stationary endpoint before A handoff'
+
+
+def test_integral_never_reaches_c_or_path_a_hold():
+    c=integral_policy(2)
+    with torch.no_grad():assert torch.equal(c(state(path=2))['joint_torques'],torch.zeros(7))
+    b,ref=integral_policy(),policy(1)
+    with torch.no_grad():
+        for k in range(500):s=state(path=0,ms=10000+k);x,y=b(s),ref(s)
+    assert torch.allclose(x['joint_torques'],y['joint_torques'])
+
+
+def test_integral_configuration_validation():
+    import pytest
+    from teleop.tracking_native import validate_integral
+    assert validate_integral(None) is None
+    ok=dict(time_s=.5,leak_s=5,limit_Nm=LIMIT)
+    assert validate_integral(ok)['limit_Nm']==LIMIT
+    for bad in (dict(ok,time_s=.1),dict(ok,leak_s=.4),dict(ok,limit_Nm=[4.]*7),dict(ok,limit_Nm=[1.]*6),
+                dict(ok,extra=1),dict(time_s=.5,leak_s=5)):
+        with pytest.raises(ValueError):validate_integral(bad)
 
 
 if __name__=='__main__':
