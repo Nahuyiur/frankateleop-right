@@ -51,7 +51,20 @@ def validate_integral(value):
     return dict(time_s=float(t),leak_s=float(leak),limit_Nm=[float(v) for v in limit])
 
 
-def configure(robot, artifact, sha256, path, record_id, stiffness, integral=None):
+def validate_friction(value):
+    """B-only Coulomb feedforward on desired velocity; None keeps it off."""
+    if value is None:return None
+    if not isinstance(value,dict) or set(value)!={'coulomb_Nm','velocity_rad_s'}:
+        raise ValueError('Friction feedforward requires coulomb_Nm and velocity_rad_s')
+    c,v0=value['coulomb_Nm'],value['velocity_rad_s']
+    if (not isinstance(c,list) or len(c)!=7 or
+            any(type(x) not in (int,float) or not np.isfinite(x) or not 0<=x<=1 for x in c)):
+        raise ValueError('Coulomb feedforward must be seven values in [0, 1] Nm')
+    if type(v0) not in (int,float) or not .005<=v0<=.2:raise ValueError('Friction smoothing velocity must be 0.005-0.2 rad/s')
+    return dict(coulomb_Nm=[float(x) for x in c],velocity_rad_s=float(v0))
+
+
+def configure(robot, artifact, sha256, path, record_id, stiffness, integral=None, friction=None):
     from teleop.tracking_reference import check,check_native_mode
     from teleop.tracking_policy import NativeTrackingHybridJointImpedanceControl
     from teleop.tracking_impedance import snapshot
@@ -59,6 +72,8 @@ def configure(robot, artifact, sha256, path, record_id, stiffness, integral=None
     if path not in ('B','C'):raise ValueError('Native path must be B or C')
     integral=validate_integral(integral)
     if integral and path!='B':raise ValueError('Integral correction is B-only')
+    friction=validate_friction(friction)
+    if friction and path!='B':raise ValueError('Friction feedforward is B-only')
     if type(record_id) is not int or not 0<record_id<2**48:raise ValueError('Invalid recording ID')
     if not isinstance(artifact,str) or not re.fullmatch(r'[a-f0-9]{24}\.npz',artifact):raise ValueError('Invalid preload artifact name')
     source=ROOT/artifact
@@ -94,6 +109,8 @@ def configure(robot, artifact, sha256, path, record_id, stiffness, integral=None
         record_id=record_id,stiffness=torch.tensor(stiffness,dtype=torch.float64),
         **(dict(integral_time_s=integral['time_s'],integral_leak_s=integral['leak_s'],
                 integral_limit_Nm=torch.tensor(integral['limit_Nm'],dtype=torch.float32)) if integral else {}),
+        **(dict(friction_Nm=torch.tensor(friction['coulomb_Nm'],dtype=torch.float32),
+                friction_velocity_rad_s=friction['velocity_rad_s']) if friction else {}),
         **{k:torch.tensor(v,dtype=torch.float32) for k,v in gains.items()})
     # A failed/uncertain SetController must retain ownership and fail closed.
     robot._tracking_native=dict(path=path,record_id=record_id,pending=True)
@@ -106,7 +123,9 @@ def configure(robot, artifact, sha256, path, record_id, stiffness, integral=None
         cartesian_stiffness=list(stiffness) if path=='C' else None,prelude_s=3.,
         controller='NativeTrackingHybridJointImpedanceControl' if path=='B' else 'Franka internal Cartesian impedance',
         control_law_id=('hybrid-native-qd-integral-v1' if integral else 'hybrid-native-qd-v1') if path=='B' else 'franka-cartesian-impedance-firmware',
-        integral=integral,
+        integral=integral,friction=friction,
+        friction_formula=('tau_f = Fc * tanh(dq_d / v0) on native desired velocity in B only; tau = tau_policy + tau_f (+ tau_i)')
+            if friction else None,
         integral_formula=('tau_i = Kp(q) z; dz/dt = (q_d - q)/Ti - z/T_leak in phases 1-2; z decays with 0.2 s otherwise; '
                           '|tau_i| <= limit by uniform scaling; tau = tau_policy + tau_i') if integral else None,
         formula=FORMULA if path=='B' else 'w ≈ K_C e_x + D_C(v_ref − v); explanatory model, not a verified complete firmware law',

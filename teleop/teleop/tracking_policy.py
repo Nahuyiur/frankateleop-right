@@ -48,7 +48,8 @@ class NativeTrackingHybridJointImpedanceControl(HybridJointImpedanceControl):
     """
     def __init__(self, joint_pos_current, Kq, Kqd, Kx, Kxd, robot_model,
                  poses, path, record_id, stiffness, ignore_gravity=True,
-                 integral_time_s=0., integral_leak_s=5., integral_limit_Nm=None):
+                 integral_time_s=0., integral_leak_s=5., integral_limit_Nm=None,
+                 friction_Nm=None, friction_velocity_rad_s=.02):
         super().__init__(joint_pos_current,Kq,Kqd,Kx,Kxd,robot_model,ignore_gravity)
         # Optional B-only quasi-static correction (P1). Disabled (0) by default:
         #   tau_i = Kp(q) z,  dz/dt = (q_d - q)/Ti - z/T_leak,  |tau_i| <= limit (uniform scaling),
@@ -61,6 +62,12 @@ class NativeTrackingHybridJointImpedanceControl(HybridJointImpedanceControl):
         self.integral_last_ms = -1.
         self.integral_phase = 0 # phase of the previous cycle (computed after the torque)
         self.integral_last_torque = torch.zeros(7,dtype=torch.float32)
+        # Optional B-only Coulomb friction feedforward on the DESIRED velocity (no measured-velocity feedback):
+        #   tau_f = Fc * tanh(dq_d / v0). Zero when dq_ref is zero (waiting, path A hold, C).
+        self.friction_enabled = friction_Nm is not None
+        self.friction = (torch.zeros(7,dtype=torch.float32) if friction_Nm is None
+                         else torch.as_tensor(friction_Nm,dtype=torch.float32).clone())
+        self.friction_velocity = float(friction_velocity_rad_s)
 
         # Complete immutable 1 kHz reference is transferred before handoff.
         self.poses = poses.to(dtype=torch.float64)
@@ -106,6 +113,8 @@ class NativeTrackingHybridJointImpedanceControl(HybridJointImpedanceControl):
         feedback = self.joint_pd(q,dq,q_ref,dq_ref,jacobian)
         feedforward = self.invdyn(q,dq,torch.zeros_like(q))
         torque = feedback+feedforward
+        if self.friction_enabled and active == 1:
+            torque = torque+self.friction*torch.tanh(dq_ref.to(dtype=torch.float32)/self.friction_velocity)
         if self.integral_time_s > 0.:
             torque = torque+self.integral_torque(q,q_ref,jacobian,active,float(state_dict['native_robot_ms'][0]))
         if active == 2: # Computed external torques are never sent in C.

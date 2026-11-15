@@ -186,6 +186,35 @@ def test_integral_configuration_validation():
         with pytest.raises(ValueError):validate_integral(bad)
 
 
+FRICTION=[.3,.3,.3,.25,.2,.1,.1]
+
+
+def test_friction_feedforward_follows_desired_velocity_only_in_b():
+    import math
+    b,ref=policy(1,friction_Nm=torch.tensor(FRICTION),friction_velocity_rad_s=.02),policy(1)
+    with torch.no_grad():
+        s=state();delta=b(s)['joint_torques']-ref(s)['joint_torques']
+    expected=torch.tensor(FRICTION)*math.tanh(.1/.02)
+    assert torch.allclose(delta,expected,atol=1e-5), 'tau_f = Fc tanh(dq_d/v0), measured velocity unused'
+    with torch.no_grad():
+        s=state(path=0);assert torch.allclose(b(s)['joint_torques'],ref(s)['joint_torques']), 'no friction term during the A hold'
+        c=policy(2,friction_Nm=torch.tensor(FRICTION))
+        assert torch.equal(c(state(path=2))['joint_torques'],torch.zeros(7))
+        s=state();s['native_dq_d']=torch.zeros(7)
+        assert torch.allclose(b(s)['joint_torques'],ref(s)['joint_torques']), 'zero desired velocity gives zero feedforward'
+
+
+def test_friction_configuration_validation():
+    import pytest
+    from teleop.tracking_native import validate_friction
+    assert validate_friction(None) is None
+    ok=dict(coulomb_Nm=FRICTION,velocity_rad_s=.02)
+    assert validate_friction(ok)['coulomb_Nm']==FRICTION
+    for bad in (dict(ok,coulomb_Nm=[1.5]*7),dict(ok,coulomb_Nm=[-.1]*7),dict(ok,coulomb_Nm=[.1]*6),
+                dict(ok,velocity_rad_s=.001),dict(ok,extra=1),dict(coulomb_Nm=FRICTION)):
+        with pytest.raises(ValueError):validate_friction(bad)
+
+
 if __name__=='__main__':
     for name,fn in list(globals().items()):
         if name.startswith('test_') and not fn.__code__.co_argcount:fn();print('PASS',name)

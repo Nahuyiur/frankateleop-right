@@ -141,7 +141,7 @@ class ZMQServerRobot:
                         self._robot._tracking_record_id=value
                         result={"record_id":value}
                     elif method == "configure_tracking_native":
-                        if set(args)-{"integral"}!={"artifact","sha256","path","record_id","stiffness"}:
+                        if set(args)-{"integral","friction"}!={"artifact","sha256","path","record_id","stiffness"}:
                             raise ValueError("Native configuration requires the verified preload and explicit mode")
                         from teleop.tracking_native import configure
                         result=configure(self._robot,**args)
