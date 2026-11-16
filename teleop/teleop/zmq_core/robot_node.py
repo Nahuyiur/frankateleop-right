@@ -118,10 +118,10 @@ class ZMQServerRobot:
                         from teleop.tracking_impedance import snapshot
                         result = snapshot(self._robot)
                     elif method == "configure_tracking_impedance":
-                        if set(args) != {"gains","reference","velocity_mode"}:
+                        if set(args)-{"integral","friction"} != {"gains","reference","velocity_mode"}:
                             raise ValueError("configure_tracking_impedance requires gains, fixed trajectory reference and velocity_mode")
                         from teleop.tracking_impedance import configure
-                        result = configure(self._robot, args["gains"], args["reference"], args["velocity_mode"])
+                        result = configure(self._robot, **args)
                     elif method == "configure_tracking_static":
                         if set(args) != {"joint_target", "gripper_width"}:
                             raise ValueError("Static configuration requires joint_target and gripper_width")

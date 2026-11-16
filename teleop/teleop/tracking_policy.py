@@ -10,8 +10,29 @@ from teleop.tracking_gains import VELOCITY_REFERENCE
 
 
 class TrackingHybridJointImpedanceControl(HybridJointImpedanceControl):
-    def __init__(self, joint_pos_current, Kq, Kqd, Kx, Kxd, robot_model, ignore_gravity=True, record_id=0):
+    """A: one joint target per incoming EEF target (step by step, as inference sends them).
+
+    Optional additions, both off by default (then the output is bit-identical to before):
+      tau_i = Kp(q) z,  dz/dt = (q_des - q)/Ti - z/T_leak,  |tau_i| <= limit (uniform scaling)
+      tau_f = Fc * tanh(dq_des / v0)      on the DESIRED velocity only
+    The integral runs from the first accepted target on; it fades (0.2 s) once targets stop
+    arriving for integral_idle_s, so the handover back to the ordinary policy sees no step.
+    """
+    def __init__(self, joint_pos_current, Kq, Kqd, Kx, Kxd, robot_model, ignore_gravity=True, record_id=0,
+                 integral_time_s=0., integral_leak_s=5., integral_limit_Nm=None, integral_idle_s=1.,
+                 friction_Nm=None, friction_velocity_rad_s=.02):
         super().__init__(joint_pos_current,Kq,Kqd,Kx,Kxd,robot_model,ignore_gravity)
+        self.integral_time_s = float(integral_time_s)
+        self.integral_leak_s = float(integral_leak_s)
+        self.integral_limit = (torch.zeros(7,dtype=torch.float32) if integral_limit_Nm is None
+                               else torch.as_tensor(integral_limit_Nm,dtype=torch.float32).clone())
+        self.integral_idle_ticks = int(1000*float(integral_idle_s))
+        self.integral_state = torch.zeros(7,dtype=torch.float32)
+        self.idle_ticks = 1000000        # no target accepted yet
+        self.friction_enabled = friction_Nm is not None
+        self.friction = (torch.zeros(7,dtype=torch.float32) if friction_Nm is None
+                         else torch.as_tensor(friction_Nm,dtype=torch.float32).clone())
+        self.friction_velocity = float(friction_velocity_rad_s)
         self.joint_vel_desired = torch.nn.Parameter(torch.zeros_like(self.joint_pos_desired))
         self.target_sequence = torch.nn.Parameter(torch.zeros(1))
         self.previous_sequence = -1.
@@ -28,15 +49,36 @@ class TrackingHybridJointImpedanceControl(HybridJointImpedanceControl):
         if sequence != self.previous_sequence:
             self.previous_sequence = sequence
             self.target_age_ticks = 0
+            if sequence > 0.:
+                self.idle_ticks = 0
         else:
             self.target_age_ticks = min(self.target_age_ticks+1,self.zero_ticks)
+            self.idle_ticks = min(self.idle_ticks+1,1000000)
         freshness = max(0.,min(1.,float(self.zero_ticks-self.target_age_ticks)/(self.zero_ticks-self.fade_ticks)))
         velocity = torch.clamp(self.joint_vel_desired,-self.max_velocity,self.max_velocity)*freshness
         q,dq = state_dict['joint_positions'],state_dict['joint_velocities']
-        feedback = self.joint_pd(q,dq,self.joint_pos_desired,velocity,self.robot_model.compute_jacobian(q))
+        jacobian = self.robot_model.compute_jacobian(q)
+        feedback = self.joint_pd(q,dq,self.joint_pos_desired,velocity,jacobian)
         feedforward = self.invdyn(q,dq,torch.zeros_like(q))
+        torque = feedback+feedforward
+        if self.friction_enabled:
+            torque = torque+self.friction*torch.tanh(velocity.to(dtype=torch.float32)/self.friction_velocity)
+        if self.integral_time_s > 0.:
+            z = self.integral_state
+            if self.idle_ticks < self.integral_idle_ticks:
+                z = z+.001*((self.joint_pos_desired-q).to(dtype=torch.float32)/self.integral_time_s-z/self.integral_leak_s)
+            else:
+                z = z*math.exp(-.001/.2)
+            stiffness = self.joint_pd.Kq+jacobian.T@self.joint_pd.Kx@jacobian
+            tau = stiffness@z
+            ratio = float(torch.max(torch.abs(tau)/self.integral_limit))
+            if ratio > 1.:
+                z = z/ratio
+                tau = tau/ratio
+            self.integral_state = z
+            torque = torque+tau
         trace = torch.cat((self.joint_pos_desired, velocity, feedforward, torch.zeros(1)))
-        return {'joint_torques':feedback+feedforward, 'tracking_trace':trace,
+        return {'joint_torques':torque, 'tracking_trace':trace,
                 'native_tracking_command':self.native_tracking_command}
 
 

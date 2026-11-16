@@ -215,6 +215,69 @@ def test_friction_configuration_validation():
         with pytest.raises(ValueError):validate_friction(bad)
 
 
+def a_policy(**extra):
+    p=TrackingHybridJointImpedanceControl(joint_pos_current=torch.zeros(7),robot_model=Model(),record_id=5,
+        **{k:torch.tensor(v) for k,v in BASELINE.items()},**extra)
+    stream=io.BytesIO();torch.jit.save(torch.jit.script(p),stream);stream.seek(0)
+    return torch.jit.load(stream)
+
+
+def a_step(p,ref,sequence,target,velocity):
+    update=dict(joint_pos_desired=target,joint_vel_desired=velocity,target_sequence=torch.tensor([float(sequence)]))
+    p.update(update);ref.update(update)
+    s=state(path=0)
+    return p(s)['joint_torques']-ref(s)['joint_torques']
+
+
+def test_a_terms_off_is_bitwise_unchanged():
+    plain,off=a_policy(),a_policy(integral_time_s=0.)
+    with torch.no_grad():
+        for p in (plain,off):p.update(dict(joint_pos_desired=torch.full((7,),.02),joint_vel_desired=torch.full((7,),.1),target_sequence=torch.ones(1)))
+        s=state(path=0);assert torch.equal(plain(s)['joint_torques'],off(s)['joint_torques'])
+
+
+def test_a_friction_follows_desired_velocity_and_fades_with_stale_targets():
+    import math
+    p,ref=a_policy(friction_Nm=torch.tensor(FRICTION),friction_velocity_rad_s=.02),a_policy()
+    with torch.no_grad():
+        delta=a_step(p,ref,1,torch.full((7,),.02),torch.full((7,),.1))
+        assert torch.allclose(delta,torch.tensor(FRICTION)*math.tanh(.1/.02),atol=1e-5)
+        for _ in range(60):s=state(path=0);delta=p(s)['joint_torques']-ref(s)['joint_torques']   # no new target for 60 ms
+        assert float(delta.abs().max())<1e-6, 'stale target: desired velocity and friction term are zero'
+
+
+def test_a_integral_waits_for_first_target_is_bounded_and_fades_when_idle():
+    p,ref=a_policy(integral_time_s=.3,integral_leak_s=5.,integral_limit_Nm=torch.tensor(LIMIT)),a_policy()
+    with torch.no_grad():
+        for _ in range(500):s=state(path=0);x=p(s)['joint_torques'];y=ref(s)['joint_torques']
+        assert torch.allclose(x,y), 'holding the prepared pose before any target: no integral'
+        target=torch.full((7,),.02)
+        for k in range(1,2001):
+            delta=a_step(p,ref,(k+65)//66,target,torch.zeros(7))      # a new target every 66 ms
+        assert float(delta.abs().max())>.05 and torch.all(delta.abs()<=torch.tensor(LIMIT)+1e-5)
+        assert torch.all(torch.sign(delta)==torch.sign(target-state()['joint_positions']))
+        for _ in range(900):s=state(path=0);delta=p(s)['joint_torques']-ref(s)['joint_torques']
+        assert float(delta.abs().max())>.05, 'still active within the idle window'
+        for _ in range(1500):s=state(path=0);delta=p(s)['joint_torques']-ref(s)['joint_torques']
+        assert float(delta.abs().max())<.01, 'faded after targets stopped, before the handover'
+
+
+def test_a_configure_carries_terms_and_rejects_zero_velocity_mode():
+    from types import SimpleNamespace
+    import pytest
+    from teleop import tracking_impedance
+    from teleop.tracking_gains import DEFAULT_VELOCITY_MODE
+    reference=dict(sha256='a'*64,times_ns=[1,2],eef=[[.4,0,.3,0,0,0,1.]]*2)
+    integral=dict(time_s=.3,leak_s=5.,limit_Nm=LIMIT);friction=dict(coulomb_Nm=FRICTION,velocity_rad_s=.02)
+    robot=SimpleNamespace(control_mode='ee',_ik_mode='dik')
+    out=tracking_impedance.configure(robot,BASELINE,reference,DEFAULT_VELOCITY_MODE,integral=integral,friction=friction)
+    assert out['integral']==integral and out['friction']==friction and robot._tracking_terms==dict(integral=integral,friction=friction)
+    robot=SimpleNamespace(control_mode='ee',_ik_mode='dik')
+    assert 'integral' not in tracking_impedance.configure(robot,BASELINE,reference,DEFAULT_VELOCITY_MODE)
+    with pytest.raises(ValueError):
+        tracking_impedance.configure(SimpleNamespace(control_mode='ee',_ik_mode='dik'),BASELINE,reference,'zero',integral=integral)
+
+
 if __name__=='__main__':
     for name,fn in list(globals().items()):
         if name.startswith('test_') and not fn.__code__.co_argcount:fn();print('PASS',name)

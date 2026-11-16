@@ -30,9 +30,14 @@ def defaults(robot):
             for key in ('Kq','Kqd','Kx','Kxd')}
 
 
-def configure(robot, gains, reference, velocity_mode=DEFAULT_VELOCITY_MODE):
+def configure(robot, gains, reference, velocity_mode=DEFAULT_VELOCITY_MODE, integral=None, friction=None):
+    from teleop.tracking_native import validate_integral, validate_friction
     law = control_law(velocity_mode)
     gains = validate_gains(gains)
+    integral = validate_integral(integral)
+    friction = validate_friction(friction)
+    if (integral or friction) and law['mode'] == 'zero':
+        raise ValueError('Integral/friction terms require the trajectory-difference desired velocity')
     reference = validate_reference(reference)
     if robot.control_mode != 'ee':
         raise ValueError('tracking gains require absolute EEF replay')
@@ -41,10 +46,12 @@ def configure(robot, gains, reference, velocity_mode=DEFAULT_VELOCITY_MODE):
     if getattr(robot,'_ik_mode','polymetis') != 'dik':
         raise RuntimeError('trajectory velocity requires the verified DIK backend')
     robot._tracking_impedance_override = gains
+    robot._tracking_terms = dict(integral=integral, friction=friction)
     robot._tracking_reference = reference
     robot._tracking_velocity_mode = law["mode"]
     robot._tracking_impedance_applied = None
     return dict(configured=gains, applied=False,velocity_reference=law["velocity_reference"],control_law_id=law["id"],
+                **({'integral':integral,'friction':friction} if integral or friction else {}),
                 reference=dict(sha256=reference['sha256'],count=len(reference['times_ns'])))
 
 
@@ -52,6 +59,7 @@ def clear(robot):
     if getattr(robot,'_tracking_native',None):
         raise RuntimeError('Finish native control before clearing the replay reservation')
     robot._tracking_impedance_override = None
+    robot._tracking_terms = None
     robot._tracking_impedance_applied = None
     robot._tracking_reference = None
     robot._tracking_velocity_mode = None
@@ -68,12 +76,18 @@ def start(robot):
     from teleop.tracking_policy import TrackingHybridJointImpedanceControl
     interface = robot.robot
     gains = validate_gains(robot._tracking_impedance_override)
+    terms = getattr(robot,'_tracking_terms',None) or {}
+    integral,friction = terms.get('integral'),terms.get('friction')
     if not interface.use_grav_comp or interface.metadata.hz != 1000:
         raise RuntimeError('tracking formula requires the verified 1 kHz gravity-compensated backend')
     q = interface.get_joint_positions()
     policy = TrackingHybridJointImpedanceControl(joint_pos_current=q,
         robot_model=interface.robot_model, ignore_gravity=True,
         record_id=getattr(robot,'_tracking_record_id',0),
+        **(dict(integral_time_s=integral['time_s'],integral_leak_s=integral['leak_s'],
+                integral_limit_Nm=torch.tensor(integral['limit_Nm'],dtype=torch.float32)) if integral else {}),
+        **(dict(friction_Nm=torch.tensor(friction['coulomb_Nm'],dtype=torch.float32),
+                friction_velocity_rad_s=friction['velocity_rad_s']) if friction else {}),
         **{key:torch.tensor(value,dtype=torch.float32) for key,value in gains.items()})
     actual = {key:torch.diag(getattr(policy.joint_pd,key)).detach().cpu().tolist() for key in gains}
     files = [Path(__file__),Path(inspect.getfile(type(robot))),
@@ -85,6 +99,8 @@ def start(robot):
     law=control_law(robot._tracking_velocity_mode)
     record = dict(gains=actual, formula=law['formula'], control_law_id=law['id'], velocity_formula=law['velocity_formula'], controller='TrackingHybridJointImpedanceControl',
         path='A',record_id=getattr(robot,'_tracking_record_id',0),
+        **(dict(integral=integral,friction=friction,
+                terms_formula='tau = tau_policy + Kp(q) z + Fc tanh(dq_des/v0); dz/dt = (q_des - q)/Ti - z/T_leak while targets arrive, 0.2 s fade after 1 s without targets; |Kp z| <= limit') if integral or friction else {}),
         hz=1000,velocity_reference=law['velocity_reference'],static_software_feedforward_Nm=[0.]*7,
         runtime=runtime_provenance(),model_sha256=hashlib.sha256(interface.metadata.urdf_file.encode()).hexdigest(),
         reference=dict(sha256=reference['sha256'],count=len(reference['times_ns']),accepted=0),
