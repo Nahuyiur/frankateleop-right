@@ -7,8 +7,10 @@ FORMULA = ('τ_policy = Kp(q)(q_des − q) + Kd(q)(dq_des − dq) + τ_ff; '
            'Kp(q) = diag(Kq) + Jᵀdiag(Kx)J; Kd(q) = diag(Kqd) + Jᵀdiag(Kxd)J; '
            'τ_ff = ID(q,dq,0) − ID(q,0,0)')
 LIMIT_FACTORS = [.5, 1.5]
-VELOCITY_REFERENCE = dict(version=1, mode='validated_trajectory_joint_difference',
-    filter_tau_s=.02, max_abs_rad_s=1., max_accel_rad_s2=10.,
+# max_abs_rad_s 1.0 -> 2.5 (version 2): at original speed the wrist targets reach about 2.7 rad/s and a 1 rad/s
+# clamp turned the damping term into a brake there. 2.5 stays below the FR3 joint velocity limits (2.62 rad/s on joints 1-4).
+VELOCITY_REFERENCE = dict(version=2, mode='validated_trajectory_joint_difference',
+    filter_tau_s=.02, max_abs_rad_s=2.5, max_accel_rad_s2=10.,
     stale_fade_start_s=.03, stale_zero_s=.05,
     first_target='zero', timebase='fixed_trajectory_source_ns_at_1x')
 DEFAULT_VELOCITY_MODE = VELOCITY_REFERENCE['mode']

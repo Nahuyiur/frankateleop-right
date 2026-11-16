@@ -278,6 +278,20 @@ def test_a_configure_carries_terms_and_rejects_zero_velocity_mode():
         tracking_impedance.configure(SimpleNamespace(control_mode='ee',_ik_mode='dik'),BASELINE,reference,'zero',integral=integral)
 
 
+def test_desired_velocity_limit_passes_fast_wrist_targets_but_stays_below_joint_limits():
+    from teleop.tracking_gains import VELOCITY_REFERENCE
+    limit=VELOCITY_REFERENCE['max_abs_rad_s']
+    assert 1.<limit<=2.5, 'must cover original-speed wrist targets and stay under the FR3 2.62 rad/s joint limit'
+    p,ref=a_policy(),a_policy()
+    with torch.no_grad():
+        fast=torch.tensor([0.,0.,0.,0.,2.,0.,9.])
+        for x in (p,ref):x.update(dict(joint_pos_desired=torch.full((7,),.02),target_sequence=torch.ones(1)))
+        p.update(dict(joint_vel_desired=fast));ref.update(dict(joint_vel_desired=torch.clamp(fast,-limit,limit)))
+        s=state(path=0);out=p(s)
+        assert torch.equal(out['joint_torques'],ref(s)['joint_torques']), 'policy clamps to the same limit'
+        assert out['tracking_trace'][7+4]==2. and out['tracking_trace'][7+6]==limit, '2 rad/s passes; 9 rad/s is clamped'
+
+
 if __name__=='__main__':
     for name,fn in list(globals().items()):
         if name.startswith('test_') and not fn.__code__.co_argcount:fn();print('PASS',name)
