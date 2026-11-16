@@ -30,7 +30,7 @@ def defaults(robot):
             for key in ('Kq','Kqd','Kx','Kxd')}
 
 
-def configure(robot, gains, reference, velocity_mode=DEFAULT_VELOCITY_MODE, integral=None, friction=None):
+def configure(robot, gains, reference, velocity_mode=DEFAULT_VELOCITY_MODE, integral=None, friction=None, *, online_hz=None):
     from teleop.tracking_native import validate_integral, validate_friction
     law = control_law(velocity_mode)
     gains = validate_gains(gains)
@@ -38,7 +38,10 @@ def configure(robot, gains, reference, velocity_mode=DEFAULT_VELOCITY_MODE, inte
     friction = validate_friction(friction)
     if (integral or friction) and law['mode'] == 'zero':
         raise ValueError('Integral/friction terms require the trajectory-difference desired velocity')
-    reference = validate_reference(reference)
+    if online_hz is None:
+        reference = validate_reference(reference)
+    elif reference is not None or type(online_hz) is not int or not 5 <= online_hz <= 30:
+        raise ValueError('Invalid online tracking reference')
     if robot.control_mode != 'ee':
         raise ValueError('tracking gains require absolute EEF replay')
     if getattr(robot, '_tracking_impedance_override', None) is not None:
@@ -48,11 +51,13 @@ def configure(robot, gains, reference, velocity_mode=DEFAULT_VELOCITY_MODE, inte
     robot._tracking_impedance_override = gains
     robot._tracking_terms = dict(integral=integral, friction=friction)
     robot._tracking_reference = reference
+    robot._tracking_online_hz = online_hz
     robot._tracking_velocity_mode = law["mode"]
     robot._tracking_impedance_applied = None
     return dict(configured=gains, applied=False,velocity_reference=law["velocity_reference"],control_law_id=law["id"],
                 **({'integral':integral,'friction':friction} if integral or friction else {}),
-                reference=dict(sha256=reference['sha256'],count=len(reference['times_ns'])))
+                reference=(dict(online_hz=online_hz) if online_hz else
+                           dict(sha256=reference['sha256'],count=len(reference['times_ns']))))
 
 
 def clear(robot):
@@ -62,6 +67,8 @@ def clear(robot):
     robot._tracking_terms = None
     robot._tracking_impedance_applied = None
     robot._tracking_reference = None
+    robot._tracking_online_hz = None
+    robot._online_references = None
     robot._tracking_velocity_mode = None
     robot._tracking_velocity_sample = None
     robot._tracking_static_config = None
@@ -89,6 +96,12 @@ def start(robot):
         **(dict(friction_Nm=torch.tensor(friction['coulomb_Nm'],dtype=torch.float32),
                 friction_velocity_rad_s=friction['velocity_rad_s']) if friction else {}),
         **{key:torch.tensor(value,dtype=torch.float32) for key,value in gains.items()})
+    hz = getattr(robot, '_tracking_online_hz', None)
+    if hz:
+        # Allow one expected interval plus the existing 30/50 ms jitter window.
+        period_ticks = round(1000 / hz)
+        policy.fade_ticks += period_ticks
+        policy.zero_ticks += period_ticks
     actual = {key:torch.diag(getattr(policy.joint_pd,key)).detach().cpu().tolist() for key in gains}
     files = [Path(__file__),Path(inspect.getfile(type(robot))),
              Path(inspect.getfile(type(interface))),Path(inspect.getfile(TrackingHybridJointImpedanceControl)),
@@ -103,13 +116,19 @@ def start(robot):
                 terms_formula='tau = tau_policy + Kp(q) z + Fc tanh(dq_des/v0); dz/dt = (q_des - q)/Ti - z/T_leak while targets arrive, 0.2 s fade after 1 s without targets; |Kp z| <= limit') if integral or friction else {}),
         hz=1000,velocity_reference=law['velocity_reference'],static_software_feedforward_Nm=[0.]*7,
         runtime=runtime_provenance(),model_sha256=hashlib.sha256(interface.metadata.urdf_file.encode()).hexdigest(),
-        reference=dict(sha256=reference['sha256'],count=len(reference['times_ns']),accepted=0),
+        reference=(dict(online_hz=hz, accepted=0) if hz else
+                   dict(sha256=reference['sha256'],count=len(reference['times_ns']),accepted=0)),
         source='float32 gains in policy submitted to Polymetis; SetController acknowledged',
         software_sha256={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in files})
+    if hz:
+        record['velocity_reference'] = dict(record['velocity_reference'],
+            timebase='scheduled_ns', stale_fade_start_s=policy.fade_ticks/1000,
+            stale_zero_s=policy.zero_ticks/1000)
     interface.send_torch_policy(policy, blocking=False)
     record.update(policy_episode=int(interface._teleop_goal_episode), applied_ns=time.time_ns())
     robot._tracking_impedance_applied = record
     robot._tracking_reference_index = 0
+    robot._tracking_last_scheduled_ns = None
     robot._tracking_previous_target = None
     robot._tracking_velocity = torch.zeros(7)
     robot._tracking_velocity_sequence = 0
@@ -118,6 +137,23 @@ def start(robot):
     robot._tracking_static_frozen = None
     robot._tracking_last_target = None
     robot._tracking_had_hold = False
+
+
+def queue_online_reference(robot, scheduled_ns, eef):
+    """Metadata only. The ROS worker remains the sole source of motion commands."""
+    import math
+    queue = getattr(robot, '_online_references', None)
+    if queue is None or not robot._tracking_impedance_applied or len(queue) >= 32:
+        raise RuntimeError('Online reference queue unavailable')
+    last = queue[-1][0] if queue else robot._tracking_last_scheduled_ns
+    if type(scheduled_ns) is not int or (last is not None and scheduled_ns <= last):
+        raise ValueError('Invalid online reference order')
+    if not 0 < scheduled_ns - time.time_ns() <= 500_000_000:
+        raise ValueError('Online reference outside publication window')
+    if len(eef) != 7 or not all(math.isfinite(x) for x in eef):
+        raise ValueError('Invalid EEF reference')
+    queue.append((scheduled_ns, eef))
+    return {'scheduled_ns': scheduled_ns}
 
 
 def update_target(robot, joints, position=None, quaternion=None, *, hold=False):
@@ -138,23 +174,39 @@ def update_target(robot, joints, position=None, quaternion=None, *, hold=False):
     clipped=False
     now=time.monotonic()
     previous_time=robot._tracking_last_update_monotonic
-    resumed=previous_time is not None and now-previous_time>=VELOCITY_REFERENCE['stale_zero_s']
+    hz = getattr(robot, '_tracking_online_hz', None)
+    stale = (round(1000 / hz) / 1000 if hz else 0) + VELOCITY_REFERENCE['stale_zero_s']
+    resumed = previous_time is not None and now - previous_time >= stale
     if not hold and getattr(robot, '_tracking_static_frozen', None) is not None:
         raise RuntimeError('Static reference is frozen; release before sending another target')
     if hold:
         robot._tracking_had_hold = True
     if not hold:
-        if index>=len(reference['times_ns']):
-            raise RuntimeError('Unexpected extra target after fixed trajectory')
+        if hz:
+            if not robot._online_references:
+                raise RuntimeError('Missing online reference for incoming ROS target')
+            stamp, reference_pose = robot._online_references.popleft()
+            if not -.020 <= (time.time_ns() - stamp) / 1e9 <= .100:
+                raise RuntimeError('Online target arrived outside its scheduled window')
+            last = robot._tracking_last_scheduled_ns
+            dt = 0. if last is None else (stamp - last) / 1e9
+            resumed = resumed or dt >= stale
+        else:
+            if index >= len(reference['times_ns']):
+                raise RuntimeError('Unexpected extra target after fixed trajectory')
+            reference_pose = reference['eef'][index]
+            stamp = reference['times_ns'][index]
+            if index:
+                dt = (stamp - reference['times_ns'][index-1]) / 1e9
         pose=torch.cat((torch.as_tensor(position),torch.as_tensor(quaternion))).float()
-        expected=torch.tensor(reference['eef'][index],dtype=torch.float32)
+        expected=torch.tensor(reference_pose,dtype=torch.float32)
         quat_error=min(float(torch.linalg.vector_norm(pose[3:]-expected[3:])),float(torch.linalg.vector_norm(pose[3:]+expected[3:])))
         if (pose.shape!=(7,) or not bool(torch.isfinite(pose).all())
                 or float(torch.max(torch.abs(pose[:3]-expected[:3])))>1e-6 or quat_error>1e-5):
-            raise RuntimeError('EEF target does not match the fixed trajectory time table')
+            raise RuntimeError('EEF target does not match the fixed trajectory time table' if not hz
+                               else 'EEF target does not match the scheduled online reference')
         previous=None if resumed else robot._tracking_previous_target
         if previous is not None and robot._tracking_velocity_mode != 'zero':
-            dt=(reference['times_ns'][index]-reference['times_ns'][index-1])/1e9
             raw=(joints-previous)/dt
             limit=VELOCITY_REFERENCE['max_abs_rad_s']
             bounded=torch.clamp(raw,-limit,limit)
@@ -174,15 +226,18 @@ def update_target(robot, joints, position=None, quaternion=None, *, hold=False):
     robot._tracking_previous_target=None if hold else joints
     robot._tracking_velocity=velocity
     if not hold:
+        robot._tracking_last_scheduled_ns=stamp
         robot._tracking_reference_index=index+1
         robot._tracking_impedance_applied['reference']['accepted']=index+1
         robot._tracking_last_target = dict(q_ref=joints.tolist(), eef_reference=expected.tolist(),
-            reference_source_ns=reference['times_ns'][index], reference_index=index,
+            reference_source_ns=stamp, reference_index=index,
             target_sequence=sequence, parameter_update_index=int(updated), acknowledged_ns=time.time_ns())
     robot._tracking_velocity_sample=dict(velocity_mode=robot._tracking_velocity_mode,reference_index=index if not hold else None,
-        reference_source_ns=reference['times_ns'][index] if not hold else None,dt_s=dt,
+        reference_source_ns=stamp if not hold else None,dt_s=dt,
         raw_joint_velocity=raw.tolist(),desired_joint_velocity=velocity.tolist(),limited=clipped,
         hold=hold,resumed_after_stale=resumed,parameter_update_index=int(updated),acknowledged_ns=time.time_ns())
+    if hz and not hold:
+        robot._online_velocity_log.append((stamp, velocity.tolist()))
     return updated
 
 

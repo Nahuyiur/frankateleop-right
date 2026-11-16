@@ -92,14 +92,14 @@ class ZMQServerRobot:
                     motion_methods = {"command_joint_state", "command_ee_pose", "move_to_joint_positions",
                                       "command_replay_joints", "set_replay_mode", "release_replay",
                                       "ensure_cartesian_teleop", "command_gripper", "configure_tracking_impedance",
-                                      "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample",
+                                      "configure_online_tracking", "queue_online_reference", "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample",
                                       "configure_tracking_native", "get_tracking_native", "start_tracking_native", "finish_tracking_native", "configure_tracking_record"}
                     if method in motion_methods:
                         if self._replay_token is not None and token != self._replay_token:
                             raise RuntimeError("robot is reserved for episode replay")
                         if token is not None and token != self._replay_token:
                             raise RuntimeError("replay reservation is no longer valid")
-                        if method in {"set_replay_mode", "command_replay_joints", "release_replay", "configure_tracking_impedance", "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample", "configure_tracking_native", "get_tracking_native", "start_tracking_native", "finish_tracking_native", "configure_tracking_record"} and not self._replay_token:
+                        if method in {"set_replay_mode", "command_replay_joints", "release_replay", "configure_tracking_impedance", "configure_online_tracking", "queue_online_reference", "configure_tracking_static", "freeze_tracking_target", "get_tracking_static_sample", "configure_tracking_native", "get_tracking_native", "start_tracking_native", "finish_tracking_native", "configure_tracking_record"} and not self._replay_token:
                             raise RuntimeError("replay reservation required")
                     if method == "get_replay_capabilities":
                         result = {"version": 1, "recording_observations": True, "reserved": self._replay_token is not None, "replay_feedback": True, "tracking_impedance": 3, "static_sampling": 1, "native_tracking": 1}
@@ -122,6 +122,27 @@ class ZMQServerRobot:
                             raise ValueError("configure_tracking_impedance requires gains, fixed trajectory reference and velocity_mode")
                         from teleop.tracking_impedance import configure
                         result = configure(self._robot, **args)
+                    elif method == "configure_online_tracking":
+                        from collections import deque
+                        from teleop.tracking_impedance import configure, snapshot
+                        if set(args) != {"gains","online_hz","integral","friction"}:
+                            raise ValueError("Online tracking requires gains, frequency and compensation")
+                        configure(self._robot, reference=None, **args)
+                        self._robot._online_references = deque()
+                        self._robot._online_log_session = token
+                        self._robot._online_velocity_log = deque(maxlen=2048)
+                        self._robot.set_replay_mode("ee")
+                        result = snapshot(self._robot)
+                    elif method == "queue_online_reference":
+                        from teleop.tracking_impedance import queue_online_reference
+                        result = queue_online_reference(self._robot, **args)
+                    elif method == "get_online_velocity_log":
+                        if args.get("session") != getattr(self._robot,"_online_log_session",None) or not args.get("session"):
+                            raise ValueError("Unknown online session")
+                        offset = args.get("offset", 0)
+                        if type(offset) is not int or not 0 <= offset < 2048:
+                            raise ValueError("Invalid sample offset")
+                        result = {"samples":list(self._robot._online_velocity_log)[offset:offset+256]}
                     elif method == "configure_tracking_static":
                         if set(args) != {"joint_target", "gripper_width"}:
                             raise ValueError("Static configuration requires joint_target and gripper_width")

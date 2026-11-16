@@ -297,3 +297,30 @@ if __name__=='__main__':
                test_static_hold_lost_target_and_incomplete_prefix_fail_closed,
                test_saved_static_target_selected_only_at_endpoint_and_jump_guarded]:fn()
     print('PASS: real TorchScript torque/expiry, trajectory timing, limits, holds, DIK telemetry, reservation and restoration; no hardware connection.')
+
+
+def test_online_reference_timing_and_hold():
+    from collections import deque
+    import pytest
+    r=robot(False)
+    helper.configure(r,contract.BASELINE,None,online_hz=10)
+    r._online_references=deque()
+    r._online_velocity_log=deque(maxlen=2048)
+    r._start_control_mode('ee')
+    assert r.robot.script.fade_ticks == 130 and r.robot.script.zero_ticks == 150
+    pose=[.41,.12,.3,0.,0.,0.,1.]
+    def send(delta, q):
+        stamp=round((clock[0]+delta)*1e9)
+        helper.queue_online_reference(r, stamp, pose)
+        clock[0]+=delta
+        helper.update_target(r,torch.full((7,),q),pose[:3],pose[3:])
+        return r._tracking_velocity_sample['desired_joint_velocity']
+    assert not any(send(.1,0.))
+    assert all(v>0 for v in send(.1,.01))
+    assert not any(send(.2,.02))
+    helper.update_target(r,torch.zeros(7),hold=True)
+    assert not any(send(.1,.01))
+    helper.queue_online_reference(r,round((clock[0]+.1)*1e9),pose)
+    clock[0]+=.1
+    with pytest.raises(RuntimeError,match='does not match'):
+        helper.update_target(r,torch.zeros(7),[.5,.12,.3],pose[3:])
