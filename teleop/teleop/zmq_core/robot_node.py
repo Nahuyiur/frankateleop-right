@@ -184,14 +184,20 @@ class ZMQServerRobot:
                     elif method == "command_replay_joints":
                         result = self._robot.command_replay_joints(**args)
                     elif method == "release_replay":
-                        # Restore a controller anchored at the current measured pose.
-                        # Keep the reservation if restoring fails: fail closed.
+                        # Same-mode settled default holds retain their target;
+                        # custom tracking experiments still restore defaults at
+                        # the measured pose. Keep ownership if restoration fails.
                         from teleop.tracking_impedance import clear
+                        had_tracking = any(getattr(self._robot, key, None) is not None for key in
+                                           ('_tracking_impedance_override', '_tracking_impedance_applied', '_tracking_native'))
                         if getattr(self._robot,'_tracking_native',None):
                             from teleop.tracking_native import finish
                             finish(self._robot)
                         clear(self._robot)
-                        self._robot.set_replay_mode(self._replay_original_mode)
+                        if had_tracking:
+                            self._robot.set_replay_mode(self._replay_original_mode, force_reanchor=True)
+                        else:
+                            self._robot.set_replay_mode(self._replay_original_mode)
                         self._replay_token = None
                         self._replay_original_mode = None
                         result = {"ok": True}

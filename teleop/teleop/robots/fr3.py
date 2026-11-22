@@ -731,12 +731,41 @@ class fr3Robot(Robot):
         if restart_controller:
             self._start_control_mode(self.control_mode)
 
-    def set_replay_mode(self, mode: str) -> None:
-        """Start a measured-pose replay policy, including after lazy startup."""
+    def _stable_replay_hold(self) -> bool:
+        """Reuse only a settled, verified default EE policy's accepted target.
+
+        Restarting the spring at its deflected measurement changes equilibrium
+        even with no replay targets. Custom experiments and recovery keep their
+        explicit measured-pose restart contract.
+        """
+        if (self.control_mode != "ee" or not self._cartesian_policy_started
+                or getattr(self, '_tracking_impedance_override', None) is not None
+                or getattr(self, '_tracking_impedance_applied', None) is not None
+                or getattr(self, '_tracking_native', None)
+                or getattr(self, '_dik_far_since', None) is not None):
+            return False
+        anchor = self._cartesian_hold_anchor()
+        if not anchor:
+            return False
+        state = self._native_arm.snapshot()
+        age = (time.time_ns() - state.get('state_timestamp_ns', 0)) / 1e9
+        q = np.asarray(state.get('joint_positions', []), dtype=float)
+        dq = np.asarray(state.get('joint_velocities', []), dtype=float)
+        goal = np.asarray(anchor['ee_hold_joint_goal'], dtype=float)
+        if (not -.02 <= age < .2 or q.shape != (7,) or dq.shape != (7,)
+                or not np.isfinite(np.r_[q, dq]).all()):
+            raise RuntimeError('fresh measured joints required for replay handoff')
+        return bool(np.max(np.abs(dq)) < .01 and np.max(np.abs(goal-q)) < .05)
+
+    def set_replay_mode(self, mode: str, *, force_reanchor: bool = False):
+        """Preserve a settled same-mode hold; otherwise start at measured pose."""
         if mode not in ("ee", "joint"):
             raise ValueError("unsupported replay control mode")
-        self._cartesian_policy_started = False
         running = bool(self.robot.is_running_policy())
+        if not force_reanchor and mode == "ee" and running and self._stable_replay_hold():
+            LOGGER.info("Replay handoff preserved live EE policy and accepted joint target")
+            return {"preserved_target": True}
+        self._cartesian_policy_started = False
         if running:
             try:
                 self.robot.terminate_current_policy(return_log=False)
@@ -748,6 +777,7 @@ class fr3Robot(Robot):
                     raise
         self._start_control_mode(mode)
         self.control_mode = mode
+        return {"preserved_target": False}
 
     def ensure_cartesian_teleop(self) -> None:
         """PICO recovery v2: restore measured-pose hold without terminating an absent policy."""
