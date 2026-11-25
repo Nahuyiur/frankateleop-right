@@ -51,3 +51,21 @@ Build note: the host's original CMake cache has an obsolete generated protobuf
 header. Rebuilding the server must regenerate both C++ and gRPC files from the
 current protos/polymetis.proto and consistently recompile server, run_server and
 both protobuf translation units; do not mix the stale cached object files.
+
+
+## Log export priority (2026-11-25)
+
+A live zero-target stream passed 6,299 cycles at success_rate=1.0 and
+ControlUpdate RPC max 0.408 ms. Exporting those historical cycles then coincided
+with a 37-cycle communication reflex: GetRobotStateLog inherited FIFO 80 on CPU0,
+the same priority as ControlUpdate. The export now temporarily uses the existing
+RT_LOW_PRIO=40 and restores the worker priority with RAII, including cancellation.
+No control/force limits or control gains change.
+
+Stage offline_log_export.py next to the existing q.txt, run_server.logprio and
+shared libraries in the isolated fixture directory. The script only reads live
+metadata; all ControlUpdate and log RPCs target the synthetic server at 50151.
+Functional test exported 6,299 rows, cancelled a second stream and successfully
+read state afterwards. This non-RT synthetic check is not hardware acceptance.
+Hardware acceptance must separately verify target streaming AND historical-log
+export during a guarded stationary hold. Keep the native fault-window evidence.

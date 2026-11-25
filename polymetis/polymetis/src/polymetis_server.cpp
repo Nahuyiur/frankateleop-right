@@ -6,6 +6,23 @@
 
 #include "polymetis/polymetis_server.hpp"
 
+namespace {
+// gRPC workers inherit the control server's FIFO priority. Bulk log export must
+// yield to the 1 kHz ControlUpdate handler, including during stream writes.
+class ScopedServerPriority {
+public:
+  explicit ScopedServerPriority(PolymetisControllerServerImpl &server)
+      : server_(server), previous_(server.setThreadPriority(RT_LOW_PRIO)) {}
+  ~ScopedServerPriority() { server_.setThreadPriority(previous_); }
+  ScopedServerPriority(const ScopedServerPriority &) = delete;
+  ScopedServerPriority &operator=(const ScopedServerPriority &) = delete;
+
+private:
+  PolymetisControllerServerImpl &server_;
+  int previous_;
+};
+} // namespace
+
 PolymetisControllerServerImpl::PolymetisControllerServerImpl() {
   controller_model_buffer_.reserve(MAX_MODEL_BYTES);
   updates_model_buffer_.reserve(MAX_MODEL_BYTES);
@@ -61,6 +78,7 @@ Status PolymetisControllerServerImpl::GetRobotStateStream(
 Status PolymetisControllerServerImpl::GetRobotStateLog(
     ServerContext *context, const LogInterval *interval,
     ServerWriter<RobotState> *writer) {
+  ScopedServerPriority export_priority(*this);
   // Stream until latest if end == -1
   uint end = interval->end();
   if (interval->end() == -1) {
