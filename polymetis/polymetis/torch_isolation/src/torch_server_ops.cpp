@@ -204,12 +204,31 @@ void TorchScriptedController::warmup_controller(
   // Backup
   auto tmp_module_data = module_->data.deepcopy();
 
+  // update() also has a profiling/compilation cold path. UpdateController calls
+  // it while holding the same mutex as the 1 kHz forward loop, so compile it
+  // here, before this controller can be selected by the live loop. Use only
+  // this module's registered update parameters (not nested module parameters).
+  // Copies avoid aliasing the inputs with the in-place update destination.
+  std::vector<torch::jit::IValue> warmup_update_input;
+  if (module_->data.hasattr("_param_dict") &&
+      module_->data.find_method("update")) {
+    c10::Dict<std::string, torch::Tensor> parameters;
+    for (const auto &item : module_->data.attr("_param_dict").toGenericDict()) {
+      parameters.insert(item.key().toStringRef(), item.value().toTensor().clone());
+    }
+    warmup_update_input.push_back(parameters);
+  }
+
   // Warmup
   for (int i = 0; i < warmup_iters; i++) {
+    if (!warmup_update_input.empty()) {
+      module_->data.get_method("update")(warmup_update_input);
+    }
     this->forward(init_robot_state);
   }
 
-  // Reload
+  // Restore targets, counters and all other policy state; only compiled code
+  // is shared with the warmed instance. No warmup output reaches the robot.
   module_->data = tmp_module_data;
 }
 
