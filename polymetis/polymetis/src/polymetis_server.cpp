@@ -172,6 +172,7 @@ Status
 PolymetisControllerServerImpl::ControlUpdate(ServerContext *context,
                                              const RobotState *robot_state,
                                              TorqueCommand *torque_command) {
+  const auto timing_entry=mozi::mono_ns();
   // Check if last update is stale
   if (!validRobotContext()) {
     spdlog::warn("Interrupted control update greater than threshold of {} ns. "
@@ -201,7 +202,9 @@ PolymetisControllerServerImpl::ControlUpdate(ServerContext *context,
   // Lock to prevent 1) controller updates while controller is running; 2)
   // external termination during controller selection, which might cause loading
   // of a uninitialized default controller
+  const auto timing_state_ready=mozi::mono_ns();
   custom_controller_context_.controller_mtx.lock();
+  const auto timing_locked=mozi::mono_ns();
 
   // Update episode markers
   if (custom_controller_context_.status == READY) {
@@ -270,6 +273,9 @@ PolymetisControllerServerImpl::ControlUpdate(ServerContext *context,
   }
 
   // Unlock
+  const auto timing_forwarded=mozi::mono_ns();
+  const auto timing_generation=mozi_generation_,timing_revision=mozi_revision_;
+  const auto timing_index=robot_state_buffer_.size();
   custom_controller_context_.controller_mtx.unlock();
   for (int i = 0; i < num_dofs_; i++) {
     torque_command->add_joint_torques(desired_torque[i]);
@@ -293,6 +299,14 @@ PolymetisControllerServerImpl::ControlUpdate(ServerContext *context,
   }
 
   robot_client_context_.last_update_ns = getNanoseconds();
+
+  const auto timing_completed=mozi::mono_ns();
+  // Only slow handlers enter the bounded diagnostic queue; no file I/O here.
+  if(mozi_policy_trace_ && timing_completed-timing_entry>500000ULL) {
+    mozi_policy_trace_->timing(timing_generation,timing_revision,timing_index,
+        uint64_t(robot_state->timestamp().seconds())*1000000000ULL+robot_state->timestamp().nanos(),
+        timing_entry,timing_state_ready,timing_locked,timing_forwarded,timing_completed);
+  }
 
   return Status::OK;
 }
@@ -361,8 +375,8 @@ Status PolymetisControllerServerImpl::UpdateController(
     LogInterval *interval) {
   std::lock_guard<std::mutex> service_lock(service_mtx_);
   int orig_prio = setThreadPriority(RT_LOW_PRIO);
-  const bool trace_first_update = mozi_revision_ == 0 && bool(mozi_policy_trace_);
-  if (trace_first_update) mozi_policy_trace_->emit(10,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
+  const bool trace_update = bool(mozi_policy_trace_);
+  if (trace_update) mozi_policy_trace_->emit(10,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
 
   interval->set_start(-1);
   interval->set_end(-1);
@@ -378,7 +392,7 @@ Status PolymetisControllerServerImpl::UpdateController(
   }
 
   // Load param container
-  if (trace_first_update) mozi_policy_trace_->emit(11,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
+  if (trace_update) mozi_policy_trace_->emit(11,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
   if (!custom_controller_context_.custom_controller->param_dict_load(
           updates_model_buffer_.data(), updates_model_buffer_.size())) {
     std::string error_msg = "Failed to load new controller params.";
@@ -387,11 +401,11 @@ Status PolymetisControllerServerImpl::UpdateController(
   }
 
   // Update controller & set intervals
-  if (trace_first_update) mozi_policy_trace_->emit(12,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
+  if (trace_update) mozi_policy_trace_->emit(12,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
   if (custom_controller_context_.status == RUNNING) {
     try {
       custom_controller_context_.controller_mtx.lock();
-      if (trace_first_update) mozi_policy_trace_->emit(13,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
+      if (trace_update) mozi_policy_trace_->emit(13,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
       interval->set_start(robot_state_buffer_.size());
       custom_controller_context_.custom_controller->param_dict_update_module();
       ++mozi_revision_;

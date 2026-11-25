@@ -69,3 +69,11 @@ Functional test exported 6,299 rows, cancelled a second stream and successfully
 read state afterwards. This non-RT synthetic check is not hardware acceptance.
 Hardware acceptance must separately verify target streaming AND historical-log
 export during a guarded stationary hold. Keep the native fault-window evidence.
+
+## Slow control handler timing (2026-11-25)
+
+A live 2 mm upward retest after 91 successful zero-target updates failed at revision 92: one native RPC took 2.004337 ms, with success rate 0.98. The parameter was applied before the delayed first forward; current evidence does not distinguish state parsing, mutex wait, inference or scheduling.
+
+Policy trace kind 20 now records monotonic entry/state-ready/locked/forwarded/completed times only for handlers exceeding 500 us. This is a diagnostic recording threshold, not a safety threshold. All parameter updates emit phases 10--13; every record includes pthread identity. The bounded queue performs file I/O only in the existing background thread.
+
+`trace_fields.cpp` accepts an output directory, emits a phase and a synthetic timing record, and verifies queue acceptance; inspect the flushed JSON for the supplied timestamps, nonzero thread identity and zero dropped records. Build with C++17, pthread and the include directory. This check passed, and isolated synthetic log export/cancel/followup passed (6299 rows, no errors, no hardware commands). Twelve fresh-thread inference entries were below 154 us; this offline test did not reproduce the live delay. Hardware acceptance remains pending.
