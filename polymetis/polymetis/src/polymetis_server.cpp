@@ -343,6 +343,8 @@ Status PolymetisControllerServerImpl::UpdateController(
     LogInterval *interval) {
   std::lock_guard<std::mutex> service_lock(service_mtx_);
   int orig_prio = setThreadPriority(RT_LOW_PRIO);
+  const bool trace_first_update = mozi_revision_ == 0 && bool(mozi_policy_trace_);
+  if (trace_first_update) mozi_policy_trace_->emit(10,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
 
   interval->set_start(-1);
   interval->set_end(-1);
@@ -358,6 +360,7 @@ Status PolymetisControllerServerImpl::UpdateController(
   }
 
   // Load param container
+  if (trace_first_update) mozi_policy_trace_->emit(11,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
   if (!custom_controller_context_.custom_controller->param_dict_load(
           updates_model_buffer_.data(), updates_model_buffer_.size())) {
     std::string error_msg = "Failed to load new controller params.";
@@ -366,9 +369,11 @@ Status PolymetisControllerServerImpl::UpdateController(
   }
 
   // Update controller & set intervals
+  if (trace_first_update) mozi_policy_trace_->emit(12,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
   if (custom_controller_context_.status == RUNNING) {
     try {
       custom_controller_context_.controller_mtx.lock();
+      if (trace_first_update) mozi_policy_trace_->emit(13,mozi_generation_,mozi_revision_,robot_state_buffer_.size());
       interval->set_start(robot_state_buffer_.size());
       custom_controller_context_.custom_controller->param_dict_update_module();
       ++mozi_revision_;

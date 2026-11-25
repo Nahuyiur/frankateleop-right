@@ -29,3 +29,25 @@ processes. Latencies are measurements, not a hard-real-time guarantee.
 2026-11-25 MoZI1 right offline result: three cold processes per library;
 old second update 2151–2187 us, new first/second update 11–17 us. Stateful
 regression passed. Hardware acceptance must be reported separately.
+
+## Remaining online latency and passive trace
+
+The first guarded zero-displacement hardware stream after the warmup patch still
+hit a 2.236 ms ControlUpdate RPC and 0.98 communication rate before first target
+acknowledgement. The patch removes one measured cold path; it is not full FCI
+acceptance. No communication or torque threshold was relaxed.
+
+First-parameter trace kinds: 10 RPC handler entered after priority change;
+11 binary stream received; 12 parameter container loaded; 13 controller mutex
+acquired. Existing kind 2 is parameter application and kind 3 first forward.
+All timestamps use the existing bounded queue/background writer.
+
+concurrent_bench.cpp tests concurrent direct forward/load/update. offline_rpc.py
+starts a fake robot on isolated loopback port 50151 and sends no hardware commands;
+it reads only live metadata on 50051. Its diagnostic trigger name is isolated.
+Do not treat non-realtime synthetic latency as hardware acceptance.
+
+Build note: the host's original CMake cache has an obsolete generated protobuf
+header. Rebuilding the server must regenerate both C++ and gRPC files from the
+current protos/polymetis.proto and consistently recompile server, run_server and
+both protobuf translation units; do not mix the stale cached object files.
